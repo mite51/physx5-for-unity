@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: b3c4d2b7b5c643244bb1ac2ad14e8b07
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_scene: {instanceID: 0}
+  - m_pbdParticleSystem: {instanceID: 0}
+  - m_pbdMaterial: {instanceID: 0}
+  - m_particleShader: {fileID: 4800000, guid: 9fca3174661d66c48a821528418ad85e, type: 3}
+  - m_geometry: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

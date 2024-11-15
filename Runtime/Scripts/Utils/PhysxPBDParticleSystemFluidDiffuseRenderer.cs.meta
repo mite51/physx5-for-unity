@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 19a0a8d7cdf9ac342933528a681b46a4
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_chunkAddShader: {fileID: 7200000, guid: 5e5241aa7ef1131449d68dcbec8f5198, type: 3}
+  - m_fluidShader: {fileID: 4800000, guid: 81d8ef1dd09e6d847b408a6269229d9d, type: 3}
+  - m_fluidMaterial: {instanceID: 0}
+  - m_colorDiffusionShader: {fileID: 7200000, guid: 0affc1b7ce9292b42b417944ceaae08e, type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

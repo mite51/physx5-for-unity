@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 4f7f463a85b04b447a92f1ced5e7fd16
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_scene: {instanceID: 0}
+  - m_fluidShader: {fileID: 4800000, guid: 9c5997471d4efa5438298a7ff423c575, type: 3}
+  - m_fluidMaterial: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

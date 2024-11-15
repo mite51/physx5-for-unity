@@ -1,0 +1,38 @@
+{
+    "name": "dev.yafei.physx5-for-unity",
+    "version": "1.1.0",
+    "displayName": "PhysX 5 for Unity",
+    "description": "A package for integrating the PhysX 5 engine into Unity.",
+    "unity": "2021.3",
+    "author": {
+      "name": "Yafei Ou",
+      "email": "yafei.ou@ualberta.ca"
+    },
+    "samples": [
+      {
+          "displayName": "Articulation",
+          "description": "Sample scenes for articulation",
+          "path": "Samples/Articulation"
+      },
+      {
+        "displayName": "Cloth",
+        "description": "Sample scenes for cloth",
+        "path": "Samples/Cloth"
+    },
+      {
+          "displayName": "Fluid",
+          "description": "Sample scenes for fluid",
+          "path": "Samples/Fluid"
+      },
+      {
+        "displayName": "Rigid Body",
+        "description": "Sample scenes for rigid body",
+        "path": "Samples/Rigid Body"
+      },
+      {
+        "displayName": "Soft Body",
+        "description": "Sample scenes for soft body",
+        "path": "Samples/Soft Body"
+      }
+  ]
+}
