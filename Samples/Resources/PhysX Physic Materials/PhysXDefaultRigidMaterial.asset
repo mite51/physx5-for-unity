@@ -14,4 +14,4 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_staticFriction: 0.2
   m_dynamicFriction: 0.1
-  m_restitution: 0.8
+  m_restitution: 0.2

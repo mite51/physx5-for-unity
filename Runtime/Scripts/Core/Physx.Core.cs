@@ -379,6 +379,23 @@ namespace PhysX5ForUnity
             }
         }
 
-    }
+		[DllImport(PHYSX_DLL)]
+		public static extern void SetMass(IntPtr actor, float mass);
+
+		[DllImport(PHYSX_DLL)]
+		public static extern float GetMass(IntPtr actor);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetLinearVelocity(IntPtr actor, ref Vector3 velocity);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetAngularVelocity(IntPtr actor, ref Vector3 velocity); 
+
+        [DllImport(PHYSX_DLL)]
+        public static extern Vector3 GetLinearVelocity(IntPtr actor);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern Vector3 GetAngularVelocity(IntPtr actor);
+	}
 }
 
