@@ -42,14 +42,14 @@ namespace PhysX5ForUnity
             get { return m_jointLimUpper; }
         }
 
-        public float DriveGainP
+        public float Stiffness
         {
-            get { return m_driveGainP; }
+            get { return m_stiffness; }
         }
 
-        public float DriveGainD
+        public float Damping
         {
-            get { return m_driveGainD; }
+            get { return m_damping; }
         }
 
         public float DriveMaxForce
@@ -102,9 +102,9 @@ namespace PhysX5ForUnity
         [SerializeField]
         private float m_jointLimUpper = 3.14f;
         [SerializeField]
-        private float m_driveGainP = 100.0f;
+        private float m_stiffness = 100.0f;
         [SerializeField]
-        private float m_driveGainD = 1.0f;
+        private float m_damping = 1.0f;
         [SerializeField]
         private float m_driveMaxForce = float.MaxValue;
         private PhysxArticulationKinematicTree m_physxArticulationKinematicTree;

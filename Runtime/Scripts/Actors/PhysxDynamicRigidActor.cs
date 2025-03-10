@@ -26,7 +26,7 @@ namespace PhysX5ForUnity
         }
 
 		[SerializeField]
-		private Vector3 _linearVelocity = Vector3.zero;
+		protected Vector3 _linearVelocity = Vector3.zero;
         public Vector3 linearVelocity
         {
             get { return _linearVelocity; }
@@ -41,7 +41,7 @@ namespace PhysX5ForUnity
         }
 
 		[SerializeField]
-		private Vector3 _angularVelocity = Vector3.zero;
+		protected Vector3 _angularVelocity = Vector3.zero;
         public Vector3 angularVelocity
         {
             get { return _angularVelocity; }

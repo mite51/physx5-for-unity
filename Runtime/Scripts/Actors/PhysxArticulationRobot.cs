@@ -83,8 +83,8 @@ namespace PhysX5ForUnity
                         linkShape,
                         link.JointLimLower,
                         link.JointLimUpper,
-                        link.DriveGainP,
-                        link.DriveGainD,
+                        link.Stiffness,
+                        link.Damping,
                         link.DriveMaxForce,
                         m_density
                     );
@@ -120,8 +120,8 @@ namespace PhysX5ForUnity
                             linkShape,
                             link.JointLimLower,
                             link.JointLimUpper,
-                            link.DriveGainP,
-                            link.DriveGainD,
+                            link.Stiffness,
+                            link.Damping,
                             link.DriveMaxForce,
                             m_density
                         );

@@ -4,6 +4,34 @@ using UnityEngine;
 
 namespace PhysX5ForUnity
 {
+    // Add these enums before the Physx class
+    public enum PxD6Axis
+    {
+        eX = 0,
+        eY = 1,
+        eZ = 2,
+        eTWIST = 3,
+        eSWING1 = 4,
+        eSWING2 = 5
+    }
+
+    public enum PxD6Motion
+    {
+        eLOCKED,
+        eLIMITED,
+        eFREE
+    }
+
+    public enum PxD6Drive
+    {
+        eX = 0,
+        eY = 1,
+        eZ = 2,
+        eSWING = 3,
+        eTWIST = 4,
+        eSLERP = 5
+    }
+
     public partial class Physx
     {
 #if UNITY_EDITOR_LINUX
@@ -65,6 +93,13 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void RemoveActorFromScene(IntPtr scene, IntPtr actor);
+
+        // Geometry creation functions
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateBoxGeometry(float halfWidth, float halfHeight, float halfDepth);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateCapsuleGeometry(float radius, float halfHeight);
 
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreateShape(IntPtr geometry, IntPtr material, bool isExclusive);
@@ -264,8 +299,8 @@ namespace PhysX5ForUnity
             float jointLimLower,
             float jointLimUpper,
             bool isDriveJoint,
-            float driveGainP,
-            float driveGainD,
+            float stiffness,
+            float damping,
             float driveMaxForce,
             float density
         );
@@ -301,8 +336,8 @@ namespace PhysX5ForUnity
             IntPtr geometry,
             float jointLimLower,
             float jointLimUpper,
-            float driveGainP,
-            float driveGainD,
+            float stiffness,
+            float damping,
             float driveMaxForce,
             float density
         );
@@ -317,8 +352,8 @@ namespace PhysX5ForUnity
             IntPtr geometry,
             float jointLimLower,
             float jointLimUpper,
-            float driveGainP,
-            float driveGainD,
+            float stiffness,
+            float damping,
             float driveMaxForce,
             float density
         );
@@ -396,6 +431,241 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern Vector3 GetAngularVelocity(IntPtr actor);
+        
+        // D6 Joint functions
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateD6Joint(IntPtr actor0, IntPtr actor1);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ReleaseD6Joint(IntPtr joint);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetD6JointDriveMotion(IntPtr joint, PxD6Axis axis, PxD6Motion motionType);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkJointMotion(IntPtr link, PxArticulationAxis axis, PxArticulationMotion motion);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetD6JointDrive(IntPtr joint, PxD6Drive index, float driveStiffness, float driveDamping, float driveForceLimit);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetD6DriveVelocity(IntPtr joint, ref Vector3 linearVelocity, ref Vector3 angularVelocity);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetD6DriveVelocity(IntPtr joint, out Vector3 linearVelocity, out Vector3 angularVelocity);
+
+        
+        // Articulation functions
+        
+        // Articulation Creation and Management
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateArticulationRoot(PxArticulationFlag flag, int solverIterationCount);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr AddArticulationRootToScene(IntPtr scene, IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr RemoveArticulationRootFromScene(IntPtr scene, IntPtr articulation);
+
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ReleaseArticulation(IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern uint GetArticulationLinkCount(IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationLinks(IntPtr articulation, IntPtr[] userBuffer, uint bufferSize, uint startIndex);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern uint GetArticulationDofs(IntPtr articulation);
+
+        // Articulation Link Management
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateArticulationLink(IntPtr articulation, IntPtr parentLink, ref PxTransformData pose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkShape(IntPtr link, IntPtr shape);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void UpdateArticulationLinkMassAndInertia(IntPtr link, float density);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr GetLinkArticulation(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationLinkGlobalPose(IntPtr link, out PxTransformData destPose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern uint GetArticulationLinkInboundJointDof(IntPtr link);
+
+        // Articulation Link Properties
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkLinearDamping(IntPtr link, float linearDamping);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetArticulationLinkLinearDamping(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkAngularDamping(IntPtr link, float angularDamping);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetArticulationLinkAngularDamping(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkMaxLinearVelocity(IntPtr link, float maxLinearVelocity);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetArticulationLinkMaxLinearVelocity(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationLinkMaxAngularVelocity(IntPtr link, float maxAngularVelocity);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetArticulationLinkMaxAngularVelocity(IntPtr link);
+
+        // Articulation Joint Configuration
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr GetArticulationJoint(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointType(IntPtr joint, PxArticulationJointType type);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointParentPose(IntPtr joint, ref PxTransformData pose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointChildPose(IntPtr joint, ref PxTransformData pose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointMotion(IntPtr joint, PxArticulationAxis axis, PxArticulationMotion motion);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointLimitParams(IntPtr joint, PxArticulationAxis axis, float lower, float upper);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointDriveParams(IntPtr joint, PxArticulationAxis axis, float stiffness, float damping, float maxForce);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointDriveTarget(IntPtr joint, PxArticulationAxis axis, float target);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointDriveVelocity(IntPtr joint, PxArticulationAxis axis, float velocity);
+
+        // Articulation Simulation Properties
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationRootGlobalPose(IntPtr articulation, ref PxTransformData pose, bool autowake);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationSolverIterationCounts(IntPtr articulation, uint positionIters, uint velocityIters);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationSleepThreshold(IntPtr articulation, float threshold);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationStabilizationThreshold(IntPtr articulation, float threshold);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationWakeCounter(IntPtr articulation, float wakeCounterValue);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void WakeUpArticulation(IntPtr articulation);
+
+        // New articulation link joint functions
+        public static void SetArticulationLinkJointDriveParams(IntPtr link, PxArticulationAxis axis, float stiffness, float damping, float maxForce)
+        {
+            // Get the joint from the link
+            IntPtr joint = GetArticulationJoint(link);
+            if (joint != IntPtr.Zero)
+            {
+                // Call the joint drive params function
+                SetArticulationJointDriveParams(joint, axis, stiffness, damping, maxForce);
+            }
+        }
+/*
+        public static void SetArticulationLinkJointMotion(IntPtr link, PxArticulationAxis axis, PxArticulationMotion motion)
+        {
+            // Get the joint from the link
+            if (link != IntPtr.Zero)
+            {
+                IntPtr joint = GetArticulationJoint(link);
+                if (joint != IntPtr.Zero)
+                {                
+                    // Call the joint motion function
+                    SetArticulationJointMotion(joint, axis, motion);
+                }
+            }
+        }
+*/
+        public static void SetArticulationLinkJointLimits(IntPtr link, PxArticulationAxis axis, float lower, float upper)
+        {
+            // Get the joint from the link
+            if (link != IntPtr.Zero)
+            {
+                IntPtr joint = GetArticulationJoint(link);
+                if (joint != IntPtr.Zero)
+                {                   
+                    SetArticulationJointLimitParams(joint, axis, Mathf.Deg2Rad * lower, Mathf.Deg2Rad * upper);
+                }
+            }
+        }
+
+        public static void SetArticulationLinkJointDriveTarget(IntPtr link, PxArticulationAxis axis, float target)
+        {
+            // Get the joint from the link
+            IntPtr joint = GetArticulationJoint(link);
+            if (joint != IntPtr.Zero)
+            {
+                float radians = Mathf.Deg2Rad * target;
+                Debug.Log($"SetArticulationLinkJointDriveTarget: {axis} {target} {radians}");
+                SetArticulationJointDriveTarget(joint, axis, radians);
+            }
+        }
+
+        public static void SetArticulationLinkJointDriveVelocity(IntPtr link, PxArticulationAxis axis, float velocity)
+        {
+            // Get the joint from the link
+            IntPtr joint = GetArticulationJoint(link);
+            if (joint != IntPtr.Zero)
+            {
+                SetArticulationJointDriveVelocity(joint, axis, velocity);
+            }
+        }
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void PutArticulationToSleep(IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationMaxCOMLinearVelocity(IntPtr articulation, float maxLinearVelocity);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationMaxCOMAngularVelocity(IntPtr articulation, float maxAngularVelocity);
+
+        // Articulation Cache Management
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateArticulationCache(IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ReleaseArticulationCache(IntPtr cache);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ApplyArticulationCache(IntPtr articulation, IntPtr cache, PxArticulationCacheFlags flags);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void CopyInternalStateToArticulationCache(IntPtr articulation, IntPtr cache, PxArticulationCacheFlags flags);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationJointPositions(IntPtr articulation, IntPtr cache, float[] positions, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointPositions(IntPtr articulation, IntPtr cache, float[] positions, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationJointVelocities(IntPtr articulation, IntPtr cache, float[] velocities, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointVelocities(IntPtr articulation, IntPtr cache, float[] velocities, uint bufferSize);
+
 	}
 }
 

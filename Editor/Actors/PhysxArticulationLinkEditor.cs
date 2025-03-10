@@ -43,9 +43,9 @@ namespace PhysX5ForUnity
                 EditorGUILayout.PropertyField(m_isDriveJoint);
                 if (m_isDriveJoint.boolValue)
                 {
-                    EditorGUILayout.PropertyField(m_driveGainP);
-                    EditorGUILayout.PropertyField(m_driveGainD);
-                    EditorGUILayout.PropertyField(m_driveMaxForce);
+					EditorGUILayout.PropertyField(m_stiffness);
+					EditorGUILayout.PropertyField(m_damping);
+					EditorGUILayout.PropertyField(m_driveMaxForce);
                 }
             }
 

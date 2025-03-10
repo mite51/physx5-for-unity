@@ -88,5 +88,65 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void ComputeGeomBounds(out PxBounds3 bounds, IntPtr geom, ref PxTransformData pose, float offset, float inflation);
+
+        // Helper methods for creating geometries
+        
+        /// <summary>
+        /// Creates a box geometry with the specified dimensions.
+        /// </summary>
+        /// <param name="halfExtents">Half-extents of the box (half width, height, depth)</param>
+        /// <returns>Pointer to the created box geometry</returns>
+        public static IntPtr CreateBoxGeometry(Vector3 halfExtents)
+        {
+            return Physx.CreateBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z);
+        }
+
+        /// <summary>
+        /// Creates a box geometry with the specified dimensions.
+        /// </summary>
+        /// <param name="halfWidth">Half width of the box (X dimension)</param>
+        /// <param name="halfHeight">Half height of the box (Y dimension)</param>
+        /// <param name="halfDepth">Half depth of the box (Z dimension)</param>
+        /// <returns>Pointer to the created box geometry</returns>
+        public static IntPtr CreateBoxGeometry(float halfWidth, float halfHeight, float halfDepth)
+        {
+            return Physx.CreateBoxGeometry(halfWidth, halfHeight, halfDepth);
+        }
+
+        /// <summary>
+        /// Creates a capsule geometry with the specified dimensions.
+        /// </summary>
+        /// <param name="radius">Radius of the capsule</param>
+        /// <param name="halfHeight">Half height of the capsule's cylindrical part</param>
+        /// <returns>Pointer to the created capsule geometry</returns>
+        public static IntPtr CreateCapsuleGeometry(float radius, float halfHeight)
+        {
+            return Physx.CreateCapsuleGeometry(radius, halfHeight);
+        }
+
+        /// <summary>
+        /// Creates a default material with standard properties.
+        /// </summary>
+        /// <returns>Pointer to the created material</returns>
+        public static IntPtr CreateDefaultMaterial()
+        {
+            // Create a material with standard properties (static friction, dynamic friction, restitution)
+            float staticFriction = 0.5f;
+            float dynamicFriction = 0.5f;
+            float restitution = 0.6f;
+            
+            // Assuming there's a CreatePxMaterial function in the DLL
+            return CreatePxMaterial(staticFriction, dynamicFriction, restitution);
+        }
+
+        /// <summary>
+        /// Creates a material with the specified properties.
+        /// </summary>
+        /// <param name="staticFriction">Static friction coefficient</param>
+        /// <param name="dynamicFriction">Dynamic friction coefficient</param>
+        /// <param name="restitution">Restitution (bounciness) coefficient</param>
+        /// <returns>Pointer to the created material</returns>
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreatePxMaterial(float staticFriction, float dynamicFriction, float restitution);
     }
 }

@@ -82,6 +82,14 @@ namespace PhysX5ForUnity
             return new PxTransformData(t.position, t.rotation);
         }
 
+        public static PxTransformData ToPxLocalTransformData(this Transform t)
+        {
+            if (t == null)
+                throw new ArgumentNullException(nameof(t));
+
+            return new PxTransformData(t.localPosition, t.localRotation);
+        }        
+
         public static PxTransformData ToPxTransformData(this Matrix4x4 t)
         {
             Vector3 position;
@@ -194,13 +202,14 @@ namespace PhysX5ForUnity
         Fix = 0,
         Prismatic = 1,
         Revolute = 2,
-    }
+        Spherical = 4,
+	}
 
     public enum PxArticulationAxis
     {
 		Twist = 0,		//!< Rotational about eX
-		Swing1 = 1,	//!< Rotational about eY
-		Swing2 = 2,	//!< Rotational about eZ
+		Swing1 = 1,	    //!< Rotational about eY
+		Swing2 = 2,	    //!< Rotational about eZ
 		X = 3,			//!< Linear in eX
 		Y = 4,			//!< Linear in eY
 		Z = 5,			//!< Linear in eZ
@@ -252,4 +261,41 @@ namespace PhysX5ForUnity
         PGS,   //!< Projected Gauss-Seidel iterative solver
         TGS    //!< Temporal Gauss-Seidel solver
     };
+
+    // Articulation related enums
+    public enum PxArticulationJointType
+    {
+        Fix = 0,
+        Prismatic = 1,
+        Revolute = 2,
+        RevoluteUnWrapped = 3,
+        Spherical = 4,
+        Undefined = 5
+    }
+
+    public enum PxArticulationMotion
+    {
+        Locked,
+        Limited,
+        Free
+    }
+
+    public enum PxArticulationFlag
+    {
+        FixBase = 1 << 0,
+        DriveLimitsAreForces = 1 << 1,
+        DisableSelfCollision = 1 << 2
+    }
+
+    public enum PxArticulationCacheFlags
+    {
+        Position = 1 << 0,
+        Velocity = 1 << 1,
+        Force = 1 << 2,
+        JointTorque = 1 << 3,
+        AccelerationRoot = 1 << 4,
+        LinkVelocity = 1 << 5,
+        JointAcceleration = 1 << 6,
+        All = Position | Velocity | Force | JointTorque | AccelerationRoot | LinkVelocity | JointAcceleration
+    }
 }

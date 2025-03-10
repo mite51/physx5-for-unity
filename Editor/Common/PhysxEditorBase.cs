@@ -3,8 +3,8 @@ using UnityEngine;
 
 namespace PhysX5ForUnity
 {
-    public abstract class PhysxEditorBase : Editor
-    {
+    public abstract class PhysxEditorBase : UnityEditor.Editor
+	{
         public override void OnInspectorGUI()
         {
             m_currentGUIEnabled = !Application.isPlaying;

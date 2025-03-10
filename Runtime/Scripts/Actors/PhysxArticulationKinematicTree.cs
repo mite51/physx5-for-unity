@@ -80,8 +80,8 @@ namespace PhysX5ForUnity
                         link.JointLimLower,
                         link.JointLimUpper,
                         link.IsDriveJoint,
-                        link.DriveGainP,
-                        link.DriveGainD,
+                        link.Stiffness,
+                        link.Damping,
                         link.DriveMaxForce,
                         m_density
                     );
