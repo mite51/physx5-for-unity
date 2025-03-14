@@ -7,8 +7,8 @@ namespace PhysX5ForUnity
     //[AddComponentMenu("PhysX 5/Articulation Body")]
     public class PhysxArticulationBody : PhysxDynamicRigidActor
     {
-        [Tooltip("Whether to use gravity for this articulation body")]
-        public bool useGravity = true;
+        //[Tooltip("Whether to use gravity for this articulation body")]
+        //public bool useGravity = true;
         
         [Tooltip("Linear damping coefficient")]
         [Range(0, 1)]
@@ -25,6 +25,20 @@ namespace PhysX5ForUnity
         [Tooltip("Whether to match anchors with parent")]
         public bool matchAnchors = true;
 
+        // Articulation root settings
+        [Tooltip("Fix the base of the articulation")]
+        public bool fixBase = true;
+        
+        [Tooltip("Drive limits are interpreted as force limits instead of acceleration limits")]
+        public bool driveLimitsAreForces = false;
+        
+        [Tooltip("Disable self-collision between links in the articulation")]
+        public bool disableSelfCollision = true;
+        
+        [Tooltip("Number of solver iterations for the articulation")]
+        [Range(1, 255)]
+        public int solverIterationCount = 10;
+
         // Joint properties
         [Header("Joint Properties")]
         [Tooltip("Type of articulation joint")]
@@ -37,7 +51,6 @@ namespace PhysX5ForUnity
         public Vector3 anchorRotation = Vector3.zero;
         
         // Spherical joint motion settings
-        [Header("Spherical Joint Motion")]
         [Tooltip("Swing Y motion type")]
         public PxArticulationMotion swingYMotion = PxArticulationMotion.Free;
         
@@ -145,6 +158,11 @@ namespace PhysX5ForUnity
             Cleanup();
         }
 
+        private bool IsArticulationRoot()
+        {
+            return transform.parent == null || transform.parent.GetComponent<PhysxArticulationBody>() == null;
+        }
+
         protected override void CreateNativeObject()
         {
             if (m_initialized)
@@ -152,19 +170,65 @@ namespace PhysX5ForUnity
                 return;
             } 
 
-            // Determine if this is a root articulation body
-            m_parentBody = null;
-            if(transform.parent != null)
+            if(IsArticulationRoot())
             {
-                m_parentBody = transform.parent.GetComponentInParent<PhysxArticulationBody>();                
+                //create the root articulation
+                CreateNativeArticulation(null);
+
+                CollectChildArticulationBodies(transform, m_linkBodies);
+                
+                // Create all child links in order
+                foreach (PhysxArticulationBody childBody in m_linkBodies)
+                {
+                    if (childBody != this) // Skip the root (already created)
+                    {
+                        childBody.m_isRoot = false;
+                        childBody.m_articulation = m_articulation;
+                        childBody.CreateNativeArticulation(this);
+                    }
+                }
             }
 
-            if (m_parentBody == null || m_parentBody == this)
+        }
+
+        protected override void DestroyNativeObject()
+        {
+            if (!m_initialized)
+            {
+                return;
+            }
+
+            if(IsArticulationRoot())
+            {
+                foreach (PhysxArticulationBody childBody in m_linkBodies)
+                {
+                    childBody.DestroyNativeArticulation();
+                }
+
+                DestroyNativeArticulation();
+            }
+        }        
+
+        protected void CreateNativeArticulation(PhysxArticulationBody root_articulation)
+        {
+            if (m_initialized)
+            {
+                return;
+            } 
+
+           m_parentBody = null;
+
+            if (root_articulation == null)
             {
                 m_isRoot = true;
                 
-                // Create the articulation root
-                m_articulation = Physx.CreateArticulationRoot(PxArticulationFlag.DisableSelfCollision | PxArticulationFlag.FixBase, 10);
+                // Create the articulation root with flags based on the boolean options
+                PxArticulationFlag flags = 0;
+                if (fixBase) flags |= PxArticulationFlag.FixBase;
+                if (driveLimitsAreForces) flags |= PxArticulationFlag.DriveLimitsAreForces;
+                if (disableSelfCollision) flags |= PxArticulationFlag.DisableSelfCollision;
+                
+                m_articulation = Physx.CreateArticulationRoot(flags, solverIterationCount);
                 if (m_articulation == IntPtr.Zero)
                 {
                     Debug.LogError("Failed to create articulation root");
@@ -177,8 +241,9 @@ namespace PhysX5ForUnity
             else
             {
                 m_isRoot = false;
-                m_articulation = m_parentBody.GetArticulation();
-                m_parentBody.AddChildBody(this);
+                m_articulation = root_articulation.GetArticulation();
+                root_articulation.AddChildBody(this);
+                m_parentBody = transform.parent.GetComponent<PhysxArticulationBody>();
             }
 
             // Create the shape for this body, Try to use Unity colliders
@@ -195,7 +260,6 @@ namespace PhysX5ForUnity
             {
                 // Create root link
                 NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, IntPtr.Zero, ref pose);
-                Debug.Log($"create root {transform.name} {m_articulation}");
             }
             else
             {
@@ -203,38 +267,41 @@ namespace PhysX5ForUnity
                 NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, m_parentBody.NativeObjectPtr, ref pose);
             }
 
-            // Set the shape for this link
-            if (m_shape != IntPtr.Zero && NativeObjectPtr != IntPtr.Zero)
+            if(NativeObjectPtr != IntPtr.Zero)
             {
-                Physx.SetArticulationLinkShape(NativeObjectPtr, m_shape);
-                Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);
-                //Physx.SetMass(NativeObjectPtr, mass);
-            }
-
-            if (m_isRoot == false)
-            {             
-                m_joint = Physx.GetArticulationJoint(NativeObjectPtr);
-                if (m_joint != IntPtr.Zero)
+                // Set the shape for this link
+                if (m_shape != IntPtr.Zero)
                 {
-                    ConfigureJoint();
+                    Physx.SetArticulationLinkShape(NativeObjectPtr, m_shape);
+                    Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);
+                    //Physx.SetMass(NativeObjectPtr, mass);
                 }
-            }
+                
+                
+                if (m_isRoot == false)
+                {             
+                    m_joint = Physx.GetArticulationJoint(NativeObjectPtr);
+                    if (m_joint != IntPtr.Zero)
+                    {
+                        ConfigureJoint();
+                    }
+                }
 
-            // Set link properties
-            if (NativeObjectPtr != IntPtr.Zero)
-            {
+                // Set link properties
                 Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                 Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
             }
 
-            m_initialized = true;
+            m_initialized = NativeObjectPtr != IntPtr.Zero;
         }
 
-        protected override void DestroyNativeObject()
+        protected void DestroyNativeArticulation()
         {
-            if (!m_initialized) return;
+            if (!m_initialized)
+            {
+                return;
+            }
 
-            /*
             // Only the root should release the articulation
             if (m_isRoot && m_articulation != IntPtr.Zero)
             {
@@ -242,7 +309,6 @@ namespace PhysX5ForUnity
                 Physx.ReleaseArticulation(m_articulation);
                 m_articulation = IntPtr.Zero;
             }
-            */
 
             // Release shape if we created it
             if (m_shape != IntPtr.Zero)
@@ -263,6 +329,20 @@ namespace PhysX5ForUnity
             m_initialized = false;
         }        
 
+        private void CollectChildArticulationBodies(Transform parent, List<PhysxArticulationBody> bodies)
+        {
+            foreach (Transform child in parent)
+            {
+                PhysxArticulationBody childBody = child.GetComponent<PhysxArticulationBody>();
+                if (childBody != null && childBody != this)
+                {
+                    bodies.Add(childBody);
+                }
+                
+                // Recursively collect children
+                CollectChildArticulationBodies(child, bodies);
+            }
+        }
 
 
         private void Initialize()
@@ -385,7 +465,6 @@ namespace PhysX5ForUnity
         {
             if (m_articulation != IntPtr.Zero && m_initialized)// && m_isRoot)
             {
-                Debug.Log($"WakeUp {transform.name} {m_articulation}");
                 Physx.WakeUpArticulation(m_articulation);
             }
         }
@@ -425,6 +504,8 @@ namespace PhysX5ForUnity
                 }
                 if(m_invalidated)
                 {
+                    m_invalidated = false;
+
                     // Adjustments to the joint chain only works in FixedUpdate?
                     Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                     Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);

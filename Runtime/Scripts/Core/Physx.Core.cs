@@ -617,7 +617,7 @@ namespace PhysX5ForUnity
             if (joint != IntPtr.Zero)
             {
                 float radians = Mathf.Deg2Rad * target;
-                Debug.Log($"SetArticulationLinkJointDriveTarget: {axis} {target} {radians}");
+                //Debug.Log($"SetArticulationLinkJointDriveTarget: {axis} {target} {radians}");
                 SetArticulationJointDriveTarget(joint, axis, radians);
             }
         }
