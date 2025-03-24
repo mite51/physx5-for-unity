@@ -133,7 +133,7 @@ namespace PhysX5ForUnity
             // Create a material with standard properties (static friction, dynamic friction, restitution)
             float staticFriction = 0.5f;
             float dynamicFriction = 0.5f;
-            float restitution = 0.6f;
+            float restitution = 0.0f;
             
             // Assuming there's a CreatePxMaterial function in the DLL
             return CreatePxMaterial(staticFriction, dynamicFriction, restitution);

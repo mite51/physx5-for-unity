@@ -51,6 +51,12 @@ namespace PhysX5ForUnity
         public static extern bool InitializePhysX();
 
         /// <summary>
+        /// Get any error messages from PhysX.
+        /// </summary>
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr GetPhysxErrors();
+
+        /// <summary>
         /// Get the initialization status of PhysX.
         /// </summary>
         [DllImport(PHYSX_DLL)]
@@ -103,6 +109,12 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreateShape(IntPtr geometry, IntPtr material, bool isExclusive);
+        
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetShapeLocalPose(IntPtr shape, out PxTransformData destPose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetShapeLocalPose(IntPtr shape, ref PxTransformData pose);
 
         [DllImport(PHYSX_DLL)]
         public static extern void ReleaseShape(IntPtr shape);
@@ -499,6 +511,13 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern uint GetArticulationLinkInboundJointDof(IntPtr link);
 
+        // Add these new DllImport declarations after the other articulation joint functions:
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationJointArmature(IntPtr joint, PxArticulationAxis axis, float armature);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetArticulationJointArmature(IntPtr joint, PxArticulationAxis axis);
+
         // Articulation Link Properties
         [DllImport(PHYSX_DLL)]
         public static extern void SetArticulationLinkLinearDamping(IntPtr link, float linearDamping);
@@ -666,6 +685,33 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern void SetArticulationJointVelocities(IntPtr articulation, IntPtr cache, float[] velocities, uint bufferSize);
 
+        // For convenience, you might want to add these helper methods that work with links directly:
+        public static void SetArticulationLinkJointArmature(IntPtr link, PxArticulationAxis axis, float armature)
+        {
+            // Get the joint from the link
+            IntPtr joint = GetArticulationJoint(link);
+            if (joint != IntPtr.Zero)
+            {
+                SetArticulationJointArmature(joint, axis, armature);
+            }
+        }
+
+        public static float GetArticulationLinkJointArmature(IntPtr link, PxArticulationAxis axis)
+        {
+            // Get the joint from the link
+            IntPtr joint = GetArticulationJoint(link);
+            if (joint != IntPtr.Zero)
+            {
+                return GetArticulationJointArmature(joint, axis);
+            }
+            return 0.0f;
+        }
+
+        public static string GetPhysxErrorString()
+        {
+            IntPtr ptr = GetPhysxErrors();
+            return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+        }
 	}
 }
 

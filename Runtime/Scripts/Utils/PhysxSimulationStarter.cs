@@ -11,6 +11,11 @@ namespace PhysX5ForUnity
         {
             if (Application.isPlaying)
             {
+                string errors = Physx.GetPhysxErrorString();
+                if (!string.IsNullOrEmpty(errors))
+                {
+                    Debug.LogError($"PhysX Errors: {errors}");
+                }
                 Physx.StepPhysicsStart(Time.fixedDeltaTime);
             }
         }

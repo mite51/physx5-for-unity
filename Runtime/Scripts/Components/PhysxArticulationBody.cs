@@ -22,18 +22,18 @@ namespace PhysX5ForUnity
         [Range(0, 1)]
         public float jointFriction = 0.05f;
         
-        [Tooltip("Whether to match anchors with parent")]
-        public bool matchAnchors = true;
+        //[Tooltip("Whether to match anchors with parent")]
+        //public bool matchAnchors = true;
 
         // Articulation root settings
         [Tooltip("Fix the base of the articulation")]
-        public bool fixBase = true;
+        public bool fixBase = false;
         
         [Tooltip("Drive limits are interpreted as force limits instead of acceleration limits")]
         public bool driveLimitsAreForces = false;
         
         [Tooltip("Disable self-collision between links in the articulation")]
-        public bool disableSelfCollision = true;
+        public bool disableSelfCollision = false;
         
         [Tooltip("Number of solver iterations for the articulation")]
         [Range(1, 255)]
@@ -123,6 +123,11 @@ namespace PhysX5ForUnity
         
         [Tooltip("X-axis (twist) drive upper limit")]
         public float xDriveUpperLimit = 180f;
+
+        // Add this property with the other joint properties in the class
+        [Tooltip("Joint armature (additional inertia for stabilization)")]
+        [Range(0, 1)]
+        public float jointArmature = 0.0f;
 
         // Internal references
         private IntPtr m_articulation = IntPtr.Zero;
@@ -246,16 +251,8 @@ namespace PhysX5ForUnity
                 m_parentBody = transform.parent.GetComponent<PhysxArticulationBody>();
             }
 
-            // Create the shape for this body, Try to use Unity colliders
-            bool colliderFound = CreateShapeFromUnityCollider();
-            if (!colliderFound)
-            {
-                Debug.LogError("No collider found on " + gameObject.name + ". Please add a BoxCollider or CapsuleCollider component.");
-                return;
-            }
-
             // Create the link
-            PxTransformData pose = transform.ToPxLocalTransformData();
+            PxTransformData pose = transform.ToPxTransformData();//ToPxLocalTransformData();
             if (m_isRoot)
             {
                 // Create root link
@@ -264,7 +261,16 @@ namespace PhysX5ForUnity
             else
             {
                 // Create child link
+                //Debug.Log("Creating child link for " + gameObject.name + " with parent " + m_parentBody.gameObject.name + " and pose " + pose.position);
                 NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, m_parentBody.NativeObjectPtr, ref pose);
+            }
+
+            // Create the shape for this body, Try to use Unity colliders
+            bool colliderFound = CreateShapeFromUnityCollider();
+            if (!colliderFound)
+            {
+                Debug.LogError("No collider found on " + gameObject.name + ". Please add a BoxCollider or CapsuleCollider component.");
+                return;
             }
 
             if(NativeObjectPtr != IntPtr.Zero)
@@ -272,9 +278,8 @@ namespace PhysX5ForUnity
                 // Set the shape for this link
                 if (m_shape != IntPtr.Zero)
                 {
-                    Physx.SetArticulationLinkShape(NativeObjectPtr, m_shape);
-                    Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);
-                    //Physx.SetMass(NativeObjectPtr, mass);
+                    //Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);
+                    Physx.SetMass(NativeObjectPtr, mass);
                 }
                 
                 
@@ -327,6 +332,7 @@ namespace PhysX5ForUnity
             NativeObjectPtr = IntPtr.Zero;
             m_joint = IntPtr.Zero;
             m_initialized = false;
+
         }        
 
         private void CollectChildArticulationBodies(Transform parent, List<PhysxArticulationBody> bodies)
@@ -352,57 +358,164 @@ namespace PhysX5ForUnity
 
         private bool CreateShapeFromUnityCollider()
         {
-            // Try to get a BoxCollider
-            BoxCollider boxCollider = GetComponent<BoxCollider>();
-            if (boxCollider != null)
+            // Get all colliders from this object and valid children
+            List<Collider> validColliders = new List<Collider>();
+            CollectValidColliders(transform, validColliders);
+            
+            if (validColliders.Count == 0)
+                return false;
+
+            // Create compound shape if multiple colliders exist
+            bool isCompound = validColliders.Count > 1;
+            IntPtr material = PhysxUtils.CreateDefaultMaterial();
+            
+            if (isCompound)
             {
-                // Create box geometry
-                Vector3 halfExtents = Vector3.Scale(boxCollider.size, transform.lossyScale) * 0.5f;
-                m_geometry = PhysxUtils.CreateBoxGeometry(halfExtents);
+                // TODO: Implement compound shape creation
+                // For now, just use the first valid collider
+                return CreateShapeFromCollider(validColliders[0], material);
+            }
+            else
+            {
+                return CreateShapeFromCollider(validColliders[0], material);
+            }
+        }
+
+        public bool HasValidColliders()
+        {
+            List<Collider> colliders = new List<Collider>();
+            CollectValidColliders(transform, colliders);
+            return colliders.Count > 0;
+        }
+
+        private void CollectValidColliders(Transform current, List<Collider> colliders)
+        {
+            // Skip if this is a different PhysxActor
+            if (current != transform && current.GetComponent<PhysxActor>() != null)
+                return;
+
+            // Check for colliders on current object
+            BoxCollider box = current.GetComponent<BoxCollider>();
+            if (box != null)
+                colliders.Add(box);
+        
+            CapsuleCollider capsule = current.GetComponent<CapsuleCollider>();
+            if (capsule != null)
+                colliders.Add(capsule);
+
+            // Recurse through children
+            foreach (Transform child in current)
+            {
+                CollectValidColliders(child, colliders);
+            }
+        }
+
+        private bool CreateShapeFromCollider(Collider collider, IntPtr material)
+        {
+            if (collider is BoxCollider boxCollider)
+            {
+                // Get world space transform relative to this articulation body
+                Transform relativeTransform = boxCollider.transform;
+                Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
                 
-                // Create material
-                IntPtr material = PhysxUtils.CreateDefaultMaterial();
+                // Create box geometry with scaled size
+                Vector3 halfExtents = Vector3.Scale(boxCollider.size, localScale) * 0.5f;
+                m_geometry = PhysxUtils.CreateBoxGeometry(halfExtents);
                 
                 // Create shape
                 m_shape = Physx.CreateShape(m_geometry, material, true);
+                Physx.SetArticulationLinkShape(NativeObjectPtr, m_shape);
+
+                // Set local pose if collider is on a child object
+                if (boxCollider.transform != transform)
+                {
+                    // Calculate relative transform from collider to this body
+                    Vector3 localPos = transform.InverseTransformPoint(boxCollider.transform.TransformPoint(boxCollider.center));
+                    Quaternion localRot = Quaternion.Inverse(transform.rotation) * boxCollider.transform.rotation;
+                    
+                    PxTransformData localPose = new PxTransformData(localPos, localRot);
+                    Physx.SetShapeLocalPose(m_shape, ref localPose);
+                }
+                else if (boxCollider.center != Vector3.zero)
+                {
+                    // Handle center offset for collider on same object
+                    PxTransformData localPose = new PxTransformData(boxCollider.center, Quaternion.identity);
+                    Physx.SetShapeLocalPose(m_shape, ref localPose);
+                }
+
                 return true;
             }
-            
-            // Try to get a CapsuleCollider
-            CapsuleCollider capsuleCollider = GetComponent<CapsuleCollider>();
-            if (capsuleCollider != null)
+            else if (collider is CapsuleCollider capsuleCollider)
             {
+                Transform relativeTransform = capsuleCollider.transform;
+                Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
+                
                 // Get the largest scale component based on capsule direction
                 float radiusScale = 1.0f;
                 float heightScale = 1.0f;
                 
-                switch (capsuleCollider.direction)
-                {
-                    case 0: // X-axis
-                        radiusScale = Mathf.Max(transform.lossyScale.y, transform.lossyScale.z);
-                        heightScale = transform.lossyScale.x;
-                        break;
-                    case 1: // Y-axis
-                        radiusScale = Mathf.Max(transform.lossyScale.x, transform.lossyScale.z);
-                        heightScale = transform.lossyScale.y;
-                        break;
-                    case 2: // Z-axis
-                        radiusScale = Mathf.Max(transform.lossyScale.x, transform.lossyScale.y);
-                        heightScale = transform.lossyScale.z;
-                        break;
-                }
-                
                 // Create capsule geometry
                 float radius = capsuleCollider.radius * radiusScale;
-                float halfHeight = (capsuleCollider.height * 0.5f - capsuleCollider.radius) * heightScale;
-                
+                float halfHeight = (capsuleCollider.height * 0.5f) - radius;
+
                 m_geometry = PhysxUtils.CreateCapsuleGeometry(radius, halfHeight);
-                
-                // Create material
-                IntPtr material = PhysxUtils.CreateDefaultMaterial();
                 
                 // Create shape
                 m_shape = Physx.CreateShape(m_geometry, material, true);
+                Physx.SetArticulationLinkShape(NativeObjectPtr, m_shape);
+                
+                // Set local pose if collider is on a child object
+                if (capsuleCollider.transform != transform)
+                {
+                    // Calculate relative transform from collider to this body
+                    Vector3 localPos = transform.InverseTransformPoint(capsuleCollider.transform.TransformPoint(capsuleCollider.center));
+                    Quaternion localRot = Quaternion.Inverse(transform.rotation) * capsuleCollider.transform.rotation;
+                    
+                    // Add rotation based on capsule direction
+                    Quaternion directionRotation = Quaternion.identity;
+                    switch (capsuleCollider.direction)
+                    {
+                        case 0: // X-axis
+                            directionRotation = Quaternion.Euler(90, 0, 0);
+                            break;
+                        case 1: // Y-axis
+                            directionRotation = Quaternion.Euler(0, 0, 90);
+                            break;
+                        case 2: // Z-axis
+                            directionRotation = Quaternion.Euler(0, 90, 0);
+                            break;
+                    }
+                    
+                    localRot *= directionRotation;
+                    PxTransformData localPose = new PxTransformData(localPos, localRot);
+                    Physx.SetShapeLocalPose(m_shape, ref localPose);
+                }
+                else// if (capsuleCollider.center != Vector3.zero)
+                {
+                    // Handle center offset and direction for collider on same object
+                    Quaternion directionRotation = Quaternion.identity;
+                    switch (capsuleCollider.direction)
+                    {
+                        case 0: // X-axis
+                            directionRotation = Quaternion.Euler(90, 0, 0);
+                            break;
+                        case 1: // Y-axis
+                            directionRotation = Quaternion.Euler(0, 0, 90);
+                            break;
+                        case 2: // Z-axis
+                            directionRotation = Quaternion.Euler(0, 90, 0);
+                            break;
+                    }
+                    
+                    PxTransformData localPose = new PxTransformData(capsuleCollider.center, directionRotation);
+                    Physx.SetShapeLocalPose(m_shape, ref localPose);
+
+                    PxTransformData pout;
+                    Physx.GetShapeLocalPose(m_shape, out pout);
+                    Debug.Log($"Local pose {transform.name} {pout.position} {pout.quaternion}");
+                }
+                
+                
                 return true;
             }
             
@@ -440,6 +553,7 @@ namespace PhysX5ForUnity
                 UpdateJointLimits();
                 UpdateJointDrives();
                 UpdateJointTargets();
+                UpdateJointArmature();
             }
         }
 
@@ -506,7 +620,6 @@ namespace PhysX5ForUnity
                 {
                     m_invalidated = false;
 
-                    // Adjustments to the joint chain only works in FixedUpdate?
                     Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                     Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
                     
@@ -514,6 +627,7 @@ namespace PhysX5ForUnity
                     UpdateJointDrives();
                     UpdateJointLimits();
                     UpdateJointTargets();
+                    UpdateJointArmature();
 
                     WakeUp();
                 }
@@ -585,6 +699,19 @@ namespace PhysX5ForUnity
                 Physx.SetArticulationLinkJointDriveTarget(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveTarget);
                 Physx.SetArticulationLinkJointDriveTarget(NativeObjectPtr, PxArticulationAxis.Swing2, zDriveTarget);
                 Physx.SetArticulationLinkJointDriveTarget(NativeObjectPtr, PxArticulationAxis.Twist, xDriveTarget);
+            }
+        }
+
+        public void UpdateJointArmature()
+        {
+            if (NativeObjectPtr == IntPtr.Zero) return;
+
+            if (jointType == PxArticulationJointType.Spherical)
+            {
+                // Apply the same armature value to all axes
+                Physx.SetArticulationLinkJointArmature(NativeObjectPtr, PxArticulationAxis.Swing1, jointArmature);
+                Physx.SetArticulationLinkJointArmature(NativeObjectPtr, PxArticulationAxis.Swing2, jointArmature);
+                Physx.SetArticulationLinkJointArmature(NativeObjectPtr, PxArticulationAxis.Twist, jointArmature);
             }
         }
     }

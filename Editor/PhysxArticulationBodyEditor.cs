@@ -12,7 +12,7 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty linearDamping;
         private SerializedProperty angularDamping;
         private SerializedProperty jointFriction;
-        private SerializedProperty matchAnchors;
+        //private SerializedProperty matchAnchors;
         private SerializedProperty fixBase;
         private SerializedProperty driveLimitsAreForces;
         private SerializedProperty disableSelfCollision;
@@ -44,6 +44,7 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty xDriveTargetVelocity;
         private SerializedProperty xDriveLowerLimit;
         private SerializedProperty xDriveUpperLimit;
+        private SerializedProperty jointArmature;
 
         private bool showRootSettings = true;
         private bool showJointSettings = true;
@@ -59,7 +60,7 @@ namespace PhysX5ForUnity.Editor
             linearDamping = serializedObject.FindProperty("linearDamping");
             angularDamping = serializedObject.FindProperty("angularDamping");
             jointFriction = serializedObject.FindProperty("jointFriction");
-            matchAnchors = serializedObject.FindProperty("matchAnchors");
+            //matchAnchors = serializedObject.FindProperty("matchAnchors");
             fixBase = serializedObject.FindProperty("fixBase");
             driveLimitsAreForces = serializedObject.FindProperty("driveLimitsAreForces");
             disableSelfCollision = serializedObject.FindProperty("disableSelfCollision");
@@ -91,6 +92,7 @@ namespace PhysX5ForUnity.Editor
             xDriveTargetVelocity = serializedObject.FindProperty("xDriveTargetVelocity");
             xDriveLowerLimit = serializedObject.FindProperty("xDriveLowerLimit");
             xDriveUpperLimit = serializedObject.FindProperty("xDriveUpperLimit");
+            jointArmature = serializedObject.FindProperty("jointArmature");
         }
 
         public override void OnInspectorGUI()
@@ -106,7 +108,7 @@ namespace PhysX5ForUnity.Editor
             EditorGUILayout.PropertyField(linearDamping);
             EditorGUILayout.PropertyField(angularDamping);
             EditorGUILayout.PropertyField(jointFriction);
-            EditorGUILayout.PropertyField(matchAnchors);
+            //EditorGUILayout.PropertyField(matchAnchors);
 
             // Articulation Root Settings
             EditorGUILayout.Space();
@@ -121,13 +123,15 @@ namespace PhysX5ForUnity.Editor
                 EditorGUI.indentLevel--;
             }
 
-            // Check if a collider is present
+            // Check if valid colliders are present
             PhysxArticulationBody body = (PhysxArticulationBody)target;
-            bool hasCollider = body.GetComponent<BoxCollider>() != null || body.GetComponent<CapsuleCollider>() != null;
-            
-            if (!hasCollider)
+            if (!body.HasValidColliders())
             {
-                EditorGUILayout.HelpBox("This articulation body requires a BoxCollider or CapsuleCollider component.", MessageType.Warning);
+                EditorGUILayout.HelpBox(
+                    "This articulation body requires at least one BoxCollider or CapsuleCollider component on itself or its children " +
+                    "(excluding children that have their own PhysxActor components).", 
+                    MessageType.Warning
+                );
                 
                 if (GUILayout.Button("Add Box Collider"))
                 {
@@ -158,7 +162,8 @@ namespace PhysX5ForUnity.Editor
                 
                 EditorGUILayout.Space();
                 
-
+                EditorGUILayout.PropertyField(jointArmature);
+                
                 // Motion settings
                 EditorGUILayout.PropertyField(swingYMotion, new GUIContent("Swing Y"));
                 EditorGUILayout.PropertyField(swingZMotion, new GUIContent("Swing Z"));
