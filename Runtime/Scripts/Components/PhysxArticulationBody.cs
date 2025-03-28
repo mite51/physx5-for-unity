@@ -44,11 +44,17 @@ namespace PhysX5ForUnity
         [Tooltip("Type of articulation joint")]
         private PxArticulationJointType jointType = PxArticulationJointType.Spherical;
         
-        [Tooltip("Anchor position in local space")]
-        public Vector3 anchorPosition = Vector3.zero;
+        [Tooltip("Parent anchor position in local space")]
+        public Vector3 parentAnchorPosition = Vector3.zero;
         
-        [Tooltip("Anchor rotation in local space")]
-        public Vector3 anchorRotation = Vector3.zero;
+        [Tooltip("Parent anchor rotation in local space")]
+        public Vector3 parentAnchorRotation = Vector3.zero;
+        
+        [Tooltip("Child anchor position in local space")]
+        public Vector3 childAnchorPosition = Vector3.zero;
+        
+        [Tooltip("Child anchor rotation in local space")]
+        public Vector3 childAnchorRotation = Vector3.zero;
         
         // Spherical joint motion settings
         [Tooltip("Swing Y motion type")]
@@ -140,6 +146,12 @@ namespace PhysX5ForUnity
         private bool m_initialized = false;
 
         private bool m_invalidated = false;
+        private bool m_invalidatedJointTargets = false;
+
+        public void InvalidateJointTargets()
+        {
+            m_invalidatedJointTargets = true;
+        }
 
         protected void OnEnable()
         {
@@ -170,7 +182,7 @@ namespace PhysX5ForUnity
 
         protected override void CreateNativeObject()
         {
-            if (m_initialized)
+            if (m_initialized || !gameObject.activeInHierarchy || !isActiveAndEnabled)
             {
                 return;
             } 
@@ -194,6 +206,8 @@ namespace PhysX5ForUnity
                 }
             }
 
+            m_initialized = true;
+
         }
 
         protected override void DestroyNativeObject()
@@ -214,19 +228,16 @@ namespace PhysX5ForUnity
             }
         }        
 
-        protected void CreateNativeArticulation(PhysxArticulationBody root_articulation)
-        {
-            if (m_initialized)
-            {
-                return;
-            } 
+        private void CreateNativeArticulation(PhysxArticulationBody root_body)
+        {            
+            m_parentBody = null;
 
-           m_parentBody = null;
+            IntPtr linkConnection = IntPtr.Zero;
 
-            if (root_articulation == null)
+            if (root_body == null)
             {
                 m_isRoot = true;
-                
+
                 // Create the articulation root with flags based on the boolean options
                 PxArticulationFlag flags = 0;
                 if (fixBase) flags |= PxArticulationFlag.FixBase;
@@ -246,28 +257,19 @@ namespace PhysX5ForUnity
             else
             {
                 m_isRoot = false;
-                m_articulation = root_articulation.GetArticulation();
-                root_articulation.AddChildBody(this);
+                m_articulation = root_body.GetArticulation();
+                root_body.AddChildBody(this);
+
                 m_parentBody = transform.parent.GetComponent<PhysxArticulationBody>();
+                linkConnection = m_parentBody.NativeObjectPtr;
             }
 
             // Create the link
-            PxTransformData pose = transform.ToPxTransformData();//ToPxLocalTransformData();
-            if (m_isRoot)
-            {
-                // Create root link
-                NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, IntPtr.Zero, ref pose);
-            }
-            else
-            {
-                // Create child link
-                //Debug.Log("Creating child link for " + gameObject.name + " with parent " + m_parentBody.gameObject.name + " and pose " + pose.position);
-                NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, m_parentBody.NativeObjectPtr, ref pose);
-            }
+            PxTransformData pose = transform.ToPxLocalTransformData();//transform.ToPxTransformData(); 
+            NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, linkConnection, ref pose);
 
             // Create the shape for this body, Try to use Unity colliders
-            bool colliderFound = CreateShapeFromUnityCollider();
-            if (!colliderFound)
+            if (!CreateShapeFromUnityCollider())
             {
                 Debug.LogError("No collider found on " + gameObject.name + ". Please add a BoxCollider or CapsuleCollider component.");
                 return;
@@ -296,8 +298,6 @@ namespace PhysX5ForUnity
                 Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                 Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
             }
-
-            m_initialized = NativeObjectPtr != IntPtr.Zero;
         }
 
         protected void DestroyNativeArticulation()
@@ -340,16 +340,14 @@ namespace PhysX5ForUnity
             foreach (Transform child in parent)
             {
                 PhysxArticulationBody childBody = child.GetComponent<PhysxArticulationBody>();
-                if (childBody != null && childBody != this)
+                if (childBody != null && childBody != this && childBody.enabled && childBody.gameObject.activeInHierarchy)
                 {
                     bodies.Add(childBody);
+                    // Recursively collect children
+                    CollectChildArticulationBodies(child, bodies);                    
                 }
-                
-                // Recursively collect children
-                CollectChildArticulationBodies(child, bodies);
             }
         }
-
 
         private void Initialize()
         {
@@ -509,12 +507,7 @@ namespace PhysX5ForUnity
                     
                     PxTransformData localPose = new PxTransformData(capsuleCollider.center, directionRotation);
                     Physx.SetShapeLocalPose(m_shape, ref localPose);
-
-                    PxTransformData pout;
-                    Physx.GetShapeLocalPose(m_shape, out pout);
-                    Debug.Log($"Local pose {transform.name} {pout.position} {pout.quaternion}");
                 }
-                
                 
                 return true;
             }
@@ -536,12 +529,14 @@ namespace PhysX5ForUnity
                 return;
             } 
 
-            
-            // Set joint poses
-            PxTransformData parentPose = new PxTransformData(Vector3.zero, Quaternion.Euler(anchorRotation));
-            PxTransformData childPose = new PxTransformData(-anchorPosition, Quaternion.identity);           
-            Physx.SetArticulationJointParentPose(m_joint, ref parentPose);
-            Physx.SetArticulationJointChildPose(m_joint, ref childPose);
+            // Set joint poses using parent and child anchors
+            if(!m_isRoot)
+            {
+                PxTransformData parentPose = new PxTransformData(parentAnchorPosition, Quaternion.Euler(parentAnchorRotation));
+                PxTransformData childPose = new PxTransformData(-childAnchorPosition, Quaternion.Euler(childAnchorRotation));
+                Physx.SetArticulationJointParentPose(m_joint, ref parentPose);
+                Physx.SetArticulationJointChildPose(m_joint, ref childPose);
+            }
                        
             // Set joint type
             Physx.SetArticulationJointType(m_joint, jointType);
@@ -622,13 +617,19 @@ namespace PhysX5ForUnity
 
                     Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                     Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
-                    
+
                     UpdateMotionTypes();
                     UpdateJointDrives();
                     UpdateJointLimits();
                     UpdateJointTargets();
                     UpdateJointArmature();
 
+                    WakeUp();
+                }
+
+                if(m_invalidatedJointTargets)
+                {
+                    UpdateJointTargets();
                     WakeUp();
                 }
             }

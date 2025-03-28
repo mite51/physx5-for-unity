@@ -18,8 +18,10 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty disableSelfCollision;
         private SerializedProperty solverIterationCount;
         private SerializedProperty jointType;
-        private SerializedProperty anchorPosition;
-        private SerializedProperty anchorRotation;
+        private SerializedProperty parentAnchorPosition;
+        private SerializedProperty parentAnchorRotation;
+        private SerializedProperty childAnchorPosition;
+        private SerializedProperty childAnchorRotation;
         private SerializedProperty swingYMotion;
         private SerializedProperty swingZMotion;
         private SerializedProperty twistMotion;
@@ -66,8 +68,10 @@ namespace PhysX5ForUnity.Editor
             disableSelfCollision = serializedObject.FindProperty("disableSelfCollision");
             solverIterationCount = serializedObject.FindProperty("solverIterationCount");
             jointType = serializedObject.FindProperty("jointType");
-            anchorPosition = serializedObject.FindProperty("anchorPosition");
-            anchorRotation = serializedObject.FindProperty("anchorRotation");
+            parentAnchorPosition = serializedObject.FindProperty("parentAnchorPosition");
+            parentAnchorRotation = serializedObject.FindProperty("parentAnchorRotation");
+            childAnchorPosition = serializedObject.FindProperty("childAnchorPosition");
+            childAnchorRotation = serializedObject.FindProperty("childAnchorRotation");
             swingYMotion = serializedObject.FindProperty("swingYMotion");
             swingZMotion = serializedObject.FindProperty("swingZMotion");
             twistMotion = serializedObject.FindProperty("twistMotion");
@@ -157,8 +161,10 @@ namespace PhysX5ForUnity.Editor
                 // Only show spherical joint type as that's all we're supporting
                 // EditorGUILayout.LabelField("Joint Type: Spherical");
                 
-                EditorGUILayout.PropertyField(anchorPosition);
-                EditorGUILayout.PropertyField(anchorRotation);
+                EditorGUILayout.PropertyField(parentAnchorPosition, new GUIContent("Parent Anchor Position"));
+                EditorGUILayout.PropertyField(parentAnchorRotation, new GUIContent("Parent Anchor Rotation"));
+                EditorGUILayout.PropertyField(childAnchorPosition, new GUIContent("Child Anchor Position"));
+                EditorGUILayout.PropertyField(childAnchorRotation, new GUIContent("Child Anchor Rotation"));
                 
                 EditorGUILayout.Space();
                 
