@@ -63,6 +63,7 @@ namespace PhysX5ForUnity
             transform.rotation = pose.quaternion;
 
 			_linearVelocity = Physx.GetLinearVelocity(m_nativeObjectPtr);
+            _angularVelocity = Physx.GetAngularVelocity(m_nativeObjectPtr);
 		}
 
         protected override void CreateNativeObject()

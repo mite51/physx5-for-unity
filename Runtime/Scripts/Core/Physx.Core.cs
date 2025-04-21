@@ -403,7 +403,7 @@ namespace PhysX5ForUnity
         static Physx()
         {
             // When using PhysX 5, disable the default Physics (PhysX 4) in Unity.
-            Physics.simulationMode = SimulationMode.Script;
+            //Physics.simulationMode = SimulationMode.Script;
             InitializeIfNecessary();
         }
 
@@ -443,6 +443,12 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern Vector3 GetAngularVelocity(IntPtr actor);
+        
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetRigidDynamicStabilizationThreshold(IntPtr rigidDynamic, float threshold);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern float GetRigidDynamicStabilizationThreshold(IntPtr rigidDynamic);
         
         // D6 Joint functions
         [DllImport(PHYSX_DLL)]
@@ -507,6 +513,9 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void GetArticulationLinkGlobalPose(IntPtr link, out PxTransformData destPose);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern uint GetArticulationLinkIndex(IntPtr link);
 
         [DllImport(PHYSX_DLL)]
         public static extern uint GetArticulationLinkInboundJointDof(IntPtr link);
@@ -712,6 +721,44 @@ namespace PhysX5ForUnity
             IntPtr ptr = GetPhysxErrors();
             return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
         }
+
+        // Articulation Cache Management - New API
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateArticulationInternalStateCache(IntPtr articulation);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ReleaseArticulationInternalStateCache(IntPtr cache);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void CopyArticulationInternalStateToCache(IntPtr articulation, IntPtr cache, uint/*PxArticulationCacheFlags*/ flags);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ApplyArticulationInternalStateCache(IntPtr articulation, IntPtr cache, uint/*PxArticulationCacheFlags*/ flags);
+
+        // Direct cache access functions
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationCacheJointPositions(IntPtr cache, [Out] float[] positions, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationCacheJointPositions(IntPtr cache, [In] float[] positions, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationCacheJointVelocities(IntPtr cache, [Out] float[] velocities, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationCacheJointVelocities(IntPtr cache, [In] float[] velocities, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationCacheJointAccelerations(IntPtr cache, [Out] float[] accelerations, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationCacheJointAccelerations(IntPtr cache, [In] float[] accelerations, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetArticulationCacheJointForces(IntPtr cache, [Out] float[] forces, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationCacheJointForces(IntPtr cache, [In] float[] forces, uint bufferSize);
 	}
 }
 

@@ -286,7 +286,7 @@ namespace PhysX5ForUnity
         DriveLimitsAreForces = 1 << 1,
         DisableSelfCollision = 1 << 2
     }
-
+    /*
     public enum PxArticulationCacheFlags
     {
         Position = 1 << 0,
@@ -298,4 +298,5 @@ namespace PhysX5ForUnity
         JointAcceleration = 1 << 6,
         All = Position | Velocity | Force | JointTorque | AccelerationRoot | LinkVelocity | JointAcceleration
     }
+    */
 }

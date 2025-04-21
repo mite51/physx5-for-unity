@@ -18,10 +18,7 @@ namespace PhysX5ForUnity
         [Range(0, 1)]
         public float angularDamping = 0.05f;
         
-        [Tooltip("Joint friction coefficient")]
-        [Range(0, 1)]
-        public float jointFriction = 0.05f;
-        
+       
         //[Tooltip("Whether to match anchors with parent")]
         //public bool matchAnchors = true;
 
@@ -38,6 +35,10 @@ namespace PhysX5ForUnity
         [Tooltip("Number of solver iterations for the articulation")]
         [Range(1, 255)]
         public int solverIterationCount = 10;
+
+        [Tooltip("Sets the mass-normalized kinetic energy threshold below which the articulation may participate in stabilization. ")]
+        [Range(0.0f, 10000.0f)]
+        public float stabilizationThreshold = 10.0f;
 
         // Joint properties
         [Header("Joint Properties")]
@@ -135,18 +136,22 @@ namespace PhysX5ForUnity
         [Range(0, 1)]
         public float jointArmature = 0.0f;
 
+        [Tooltip("Synchronize the initial pose of the articulation links to match the GameObject hierarchy")]
+        public bool syncInitialPose = false;
+
         // Internal references
         private IntPtr m_articulation = IntPtr.Zero;
         private IntPtr m_joint = IntPtr.Zero;
         private PhysxArticulationBody m_parentBody = null;
         private List<PhysxArticulationBody> m_linkBodies = new List<PhysxArticulationBody>();
-        private bool m_isRoot = false;
+        public bool IsRoot { get; private set; } = false;
         private IntPtr m_shape = IntPtr.Zero;
         private IntPtr m_geometry = IntPtr.Zero;
         private bool m_initialized = false;
-
-        private bool m_invalidated = false;
+        private bool m_invalidated = false;        
         private bool m_invalidatedJointTargets = false;
+        private uint m_jointIndex = 0;
+        private uint m_jointInboundDof = 0;
 
         public void InvalidateJointTargets()
         {
@@ -165,7 +170,7 @@ namespace PhysX5ForUnity
         protected void OnDisable()
         {
             // Only the root should release the articulation
-            if (m_isRoot && m_articulation != IntPtr.Zero && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
+            if (IsRoot && m_articulation != IntPtr.Zero && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
             {
                 Physx.RemoveArticulationRootFromScene(Scene.NativeObjectPtr,m_articulation);
                 Physx.ReleaseArticulation(m_articulation);
@@ -178,6 +183,31 @@ namespace PhysX5ForUnity
         private bool IsArticulationRoot()
         {
             return transform.parent == null || transform.parent.GetComponent<PhysxArticulationBody>() == null;
+        }
+
+        public IntPtr GetJoint()
+        {
+            return m_joint;            
+        }
+
+        public uint GetJointIndex()
+        {
+            return m_jointIndex;
+        }
+
+        public uint GetJointInboundDof()
+        {
+            return m_jointInboundDof;
+        }        
+
+        public PhysxArticulationBody GetParentBody()
+        {
+            return m_parentBody;
+        }
+
+        public List<PhysxArticulationBody> GetLinkBodies()
+        {
+            return new List<PhysxArticulationBody>(m_linkBodies);
         }
 
         protected override void CreateNativeObject()
@@ -199,11 +229,59 @@ namespace PhysX5ForUnity
                 {
                     if (childBody != this) // Skip the root (already created)
                     {
-                        childBody.m_isRoot = false;
+                        childBody.IsRoot = false;
                         childBody.m_articulation = m_articulation;
                         childBody.CreateNativeArticulation(this);
+
+                        //produces some strange behavior
+                        //Physx.SetArticulationStabilizationThreshold(childBody.m_joint, stabilizationThreshold);
                     }
                 }
+
+                // Add the articulation to the scene
+                Physx.AddArticulationRootToScene(Scene.NativeObjectPtr, m_articulation);                
+
+                // Get the joint index and inbound dof for each link body
+                for (int i = 1; i < m_linkBodies.Count; i++)
+                {
+                    PhysxArticulationBody link_body = m_linkBodies[i];
+                    m_linkBodies[i].m_jointIndex = Physx.GetArticulationLinkIndex(link_body.NativeObjectPtr);
+                    m_linkBodies[i].m_jointInboundDof = Physx.GetArticulationLinkInboundJointDof(link_body.NativeObjectPtr);
+                }
+
+                // Set stabilization threshold
+                Physx.SetArticulationStabilizationThreshold(m_articulation, stabilizationThreshold);
+
+                if(syncInitialPose)
+                {
+                    // To have the chain bodies positions match the game object hierarchy, we need to
+                    // create, populate and apply an ArticulationCache
+                    ArticulationCache cache = new ArticulationCache(GetArticulation());
+                    float[] joint_positions = cache.GetJointPositions();
+                    for (int i = 1; i < m_linkBodies.Count; i++)
+                    {
+                        PhysxArticulationBody link_body = m_linkBodies[i];
+
+                        Vector3 reduced_coordinates = ArticulationCache.ExtractReducedCoordinates(link_body.transform.localRotation);
+
+                        // Note: There is a bit of a disconnect between the joint index and the order physx stores the joint links internally.
+                        uint start_index = (link_body.GetJointIndex() - 1) * 3;
+                        joint_positions[start_index + 0] = reduced_coordinates.x;
+                        joint_positions[start_index + 1] = reduced_coordinates.y;
+                        joint_positions[start_index + 2] = reduced_coordinates.z;
+
+                        //also set the drive targets
+                        link_body.xDriveTarget = reduced_coordinates.x * Mathf.Rad2Deg;
+                        link_body.yDriveTarget = reduced_coordinates.y * Mathf.Rad2Deg;
+                        link_body.zDriveTarget = reduced_coordinates.z * Mathf.Rad2Deg;
+                        link_body.UpdateJointTargets();
+                    }
+                    cache.SetJointPositions(joint_positions);
+                    cache.ApplyToArticulation(PxArticulationCacheFlags.ePOSITION);
+                }
+
+                ///the shape should inherit the joint pivot rotation?
+
             }
 
             m_initialized = true;
@@ -236,7 +314,7 @@ namespace PhysX5ForUnity
 
             if (root_body == null)
             {
-                m_isRoot = true;
+                IsRoot = true;
 
                 // Create the articulation root with flags based on the boolean options
                 PxArticulationFlag flags = 0;
@@ -256,7 +334,7 @@ namespace PhysX5ForUnity
             }
             else
             {
-                m_isRoot = false;
+                IsRoot = false;
                 m_articulation = root_body.GetArticulation();
                 root_body.AddChildBody(this);
 
@@ -264,8 +342,9 @@ namespace PhysX5ForUnity
                 linkConnection = m_parentBody.NativeObjectPtr;
             }
 
-            // Create the link
-            PxTransformData pose = transform.ToPxLocalTransformData();//transform.ToPxTransformData(); 
+            // Create the link - the pose here really doesn't have any effect, the anchor points are what matter
+            PxTransformData pose = transform.ToPxLocalTransformData();//transform.ToPxTransformData();
+            //PxTransformData pose = new PxTransformData(Vector3.zero, Quaternion.identity);
             NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, linkConnection, ref pose);
 
             // Create the shape for this body, Try to use Unity colliders
@@ -275,17 +354,17 @@ namespace PhysX5ForUnity
                 return;
             }
 
+
             if(NativeObjectPtr != IntPtr.Zero)
             {
                 // Set the shape for this link
                 if (m_shape != IntPtr.Zero)
                 {
-                    //Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);
+                    //Physx.UpdateArticulationLinkMassAndInertia(NativeObjectPtr, mass);// * 200.0f
                     Physx.SetMass(NativeObjectPtr, mass);
                 }
                 
-                
-                if (m_isRoot == false)
+                if (IsRoot == false)
                 {             
                     m_joint = Physx.GetArticulationJoint(NativeObjectPtr);
                     if (m_joint != IntPtr.Zero)
@@ -298,6 +377,7 @@ namespace PhysX5ForUnity
                 Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                 Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
             }
+
         }
 
         protected void DestroyNativeArticulation()
@@ -308,7 +388,7 @@ namespace PhysX5ForUnity
             }
 
             // Only the root should release the articulation
-            if (m_isRoot && m_articulation != IntPtr.Zero)
+            if (IsRoot && m_articulation != IntPtr.Zero)
             {
                 Physx.RemoveArticulationFromScene(m_articulation);
                 Physx.ReleaseArticulation(m_articulation);
@@ -414,7 +494,10 @@ namespace PhysX5ForUnity
             {
                 // Get world space transform relative to this articulation body
                 Transform relativeTransform = boxCollider.transform;
-                Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
+                
+                //TODO: this is a hack to avoid a crash :/
+                //Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
+                Vector3 localScale = relativeTransform.lossyScale;
                 
                 // Create box geometry with scaled size
                 Vector3 halfExtents = Vector3.Scale(boxCollider.size, localScale) * 0.5f;
@@ -432,6 +515,7 @@ namespace PhysX5ForUnity
                     Quaternion localRot = Quaternion.Inverse(transform.rotation) * boxCollider.transform.rotation;
                     
                     PxTransformData localPose = new PxTransformData(localPos, localRot);
+
                     Physx.SetShapeLocalPose(m_shape, ref localPose);
                 }
                 else if (boxCollider.center != Vector3.zero)
@@ -439,14 +523,17 @@ namespace PhysX5ForUnity
                     // Handle center offset for collider on same object
                     PxTransformData localPose = new PxTransformData(boxCollider.center, Quaternion.identity);
                     Physx.SetShapeLocalPose(m_shape, ref localPose);
-                }
+                }   
 
                 return true;
             }
             else if (collider is CapsuleCollider capsuleCollider)
             {
                 Transform relativeTransform = capsuleCollider.transform;
-                Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
+
+                //TODO: this is a hack to avoid a crash :/
+                //Vector3 localScale = transform.InverseTransformVector(relativeTransform.lossyScale);
+                Vector3 localScale = relativeTransform.lossyScale;
                 
                 // Get the largest scale component based on capsule direction
                 float radiusScale = 1.0f;
@@ -468,7 +555,7 @@ namespace PhysX5ForUnity
                     // Calculate relative transform from collider to this body
                     Vector3 localPos = transform.InverseTransformPoint(capsuleCollider.transform.TransformPoint(capsuleCollider.center));
                     Quaternion localRot = Quaternion.Inverse(transform.rotation) * capsuleCollider.transform.rotation;
-                    
+
                     // Add rotation based on capsule direction
                     Quaternion directionRotation = Quaternion.identity;
                     switch (capsuleCollider.direction)
@@ -511,7 +598,6 @@ namespace PhysX5ForUnity
                 
                 return true;
             }
-            
             return false;
         }
 
@@ -530,7 +616,7 @@ namespace PhysX5ForUnity
             } 
 
             // Set joint poses using parent and child anchors
-            if(!m_isRoot)
+            if(!IsRoot)
             {
                 PxTransformData parentPose = new PxTransformData(parentAnchorPosition, Quaternion.Euler(parentAnchorRotation));
                 PxTransformData childPose = new PxTransformData(-childAnchorPosition, Quaternion.Euler(childAnchorRotation));
@@ -572,31 +658,23 @@ namespace PhysX5ForUnity
 
         public void WakeUp()
         {
-            if (m_articulation != IntPtr.Zero && m_initialized)// && m_isRoot)
+            if (m_articulation != IntPtr.Zero && m_initialized)// && IsRoot)
             {
                 Physx.WakeUpArticulation(m_articulation);
             }
         }
 
-        private bool addedToScene = false;
         public void FixedUpdate()
         {
             if (m_initialized)
             {
-                // Add the articulation to the scene if this is the root
-                // This needs to happen *after* the joint chain is configured
-                if (m_isRoot && !addedToScene && m_articulation != IntPtr.Zero && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
-                {
-                    addedToScene = true;
-                    Physx.AddArticulationRootToScene(Scene.NativeObjectPtr, m_articulation);
-                }     
-
-                if(m_isRoot)
+                if(IsRoot)
                 {
                     uint nbLinks = Physx.GetArticulationLinkCount(m_articulation);
 
                     if(nbLinks > 0)
                     {
+                        // NOTE: There is a bit of a disconnect between the joint index and the order physx stores the joint links internally.
                         IntPtr[] links = new IntPtr[nbLinks];
                         Physx.GetArticulationLinks(m_articulation, links, nbLinks, 0);
                         
@@ -608,6 +686,10 @@ namespace PhysX5ForUnity
                         
                             m_linkBodies[i].transform.position = pose.position;
                             m_linkBodies[i].transform.rotation = pose.quaternion;
+
+                            //maybe these should come from the articulation cache?
+                            m_linkBodies[i]._linearVelocity = Physx.GetLinearVelocity(links[i]);
+                            m_linkBodies[i]._angularVelocity = Physx.GetAngularVelocity(links[i]);
                         }
                     }
                 }
@@ -642,6 +724,12 @@ namespace PhysX5ForUnity
                 if (NativeObjectPtr != IntPtr.Zero)
                 {
                     m_invalidated = true;
+                    
+                    // If we're the root, update articulation-wide properties 
+                    if (IsRoot && m_articulation != IntPtr.Zero)
+                    {
+                        Physx.SetArticulationStabilizationThreshold(m_articulation, stabilizationThreshold);
+                    }
                 }
             }
         }
@@ -715,5 +803,6 @@ namespace PhysX5ForUnity
                 Physx.SetArticulationLinkJointArmature(NativeObjectPtr, PxArticulationAxis.Twist, jointArmature);
             }
         }
+
     }
 } 

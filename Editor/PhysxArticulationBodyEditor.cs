@@ -8,15 +8,13 @@ namespace PhysX5ForUnity.Editor
     {
         private SerializedProperty scene;
         private SerializedProperty mass;
-        //private SerializedProperty useGravity;
         private SerializedProperty linearDamping;
         private SerializedProperty angularDamping;
-        private SerializedProperty jointFriction;
-        //private SerializedProperty matchAnchors;
         private SerializedProperty fixBase;
         private SerializedProperty driveLimitsAreForces;
         private SerializedProperty disableSelfCollision;
         private SerializedProperty solverIterationCount;
+        private SerializedProperty stabilizationThreshold;
         private SerializedProperty jointType;
         private SerializedProperty parentAnchorPosition;
         private SerializedProperty parentAnchorRotation;
@@ -47,6 +45,7 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty xDriveLowerLimit;
         private SerializedProperty xDriveUpperLimit;
         private SerializedProperty jointArmature;
+        private SerializedProperty syncInitialPose;
 
         private bool showRootSettings = true;
         private bool showJointSettings = true;
@@ -58,15 +57,13 @@ namespace PhysX5ForUnity.Editor
         {
             scene = serializedObject.FindProperty("m_scene");
             mass = serializedObject.FindProperty("_mass");
-            //useGravity = serializedObject.FindProperty("useGravity");
             linearDamping = serializedObject.FindProperty("linearDamping");
             angularDamping = serializedObject.FindProperty("angularDamping");
-            jointFriction = serializedObject.FindProperty("jointFriction");
-            //matchAnchors = serializedObject.FindProperty("matchAnchors");
             fixBase = serializedObject.FindProperty("fixBase");
             driveLimitsAreForces = serializedObject.FindProperty("driveLimitsAreForces");
             disableSelfCollision = serializedObject.FindProperty("disableSelfCollision");
             solverIterationCount = serializedObject.FindProperty("solverIterationCount");
+            stabilizationThreshold = serializedObject.FindProperty("stabilizationThreshold");
             jointType = serializedObject.FindProperty("jointType");
             parentAnchorPosition = serializedObject.FindProperty("parentAnchorPosition");
             parentAnchorRotation = serializedObject.FindProperty("parentAnchorRotation");
@@ -97,6 +94,7 @@ namespace PhysX5ForUnity.Editor
             xDriveLowerLimit = serializedObject.FindProperty("xDriveLowerLimit");
             xDriveUpperLimit = serializedObject.FindProperty("xDriveUpperLimit");
             jointArmature = serializedObject.FindProperty("jointArmature");
+            syncInitialPose = serializedObject.FindProperty("syncInitialPose");
         }
 
         public override void OnInspectorGUI()
@@ -108,11 +106,8 @@ namespace PhysX5ForUnity.Editor
             // Basic properties
             EditorGUILayout.PropertyField(scene);
             EditorGUILayout.PropertyField(mass);
-            //EditorGUILayout.PropertyField(useGravity);
             EditorGUILayout.PropertyField(linearDamping);
             EditorGUILayout.PropertyField(angularDamping);
-            EditorGUILayout.PropertyField(jointFriction);
-            //EditorGUILayout.PropertyField(matchAnchors);
 
             // Articulation Root Settings
             EditorGUILayout.Space();
@@ -124,6 +119,8 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(driveLimitsAreForces);
                 EditorGUILayout.PropertyField(disableSelfCollision);
                 EditorGUILayout.PropertyField(solverIterationCount);
+                EditorGUILayout.PropertyField(stabilizationThreshold, new GUIContent("Stabilization Threshold", "Threshold below which the articulation may go to sleep"));
+                EditorGUILayout.PropertyField(syncInitialPose, new GUIContent("Sync Initial Pose", "Initialize articulation links to match the game object hierarchy positions"));
                 EditorGUI.indentLevel--;
             }
 
