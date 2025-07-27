@@ -9,7 +9,7 @@ using UnityEngine;
 namespace PhysX5ForUnity
 {
     [AddComponentMenu("PhysX 5/Geometries/PhysX Shape")]
-    [DisallowMultipleComponent]
+    //[DisallowMultipleComponent]
     [DefaultExecutionOrder(-9)]
     public class PhysxShape : PhysxNativeGameObjectBase
     {
@@ -72,6 +72,12 @@ namespace PhysX5ForUnity
 
         private void CreateShape()
         {
+            if(m_material == null)
+            {
+                //m_material = Resources.Load<PhysxRigidMaterial>("PhysX Physic Materials/PhysXDefaultRigidMaterial");
+                m_material = ScriptableObject.CreateInstance<PhysxRigidMaterial>();
+            }            
+
             m_material.AddShape(this);
             m_geometry = GetComponent<PhysxGeometry>();
             if (isExclusive) CreateExclusiveShape();
@@ -111,6 +117,12 @@ namespace PhysX5ForUnity
 
         [SerializeField]
         private PhysxMaterial m_material;
+        
+        public PhysxMaterial Material
+        {
+            get { return m_material; }
+            set { m_material = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
+        }
         [SerializeField]
         private bool isExclusive = true;
     }

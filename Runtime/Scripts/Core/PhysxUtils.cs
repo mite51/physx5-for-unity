@@ -125,6 +125,16 @@ namespace PhysX5ForUnity
         }
 
         /// <summary>
+        /// Creates a sphere geometry with the specified radius.
+        /// </summary>
+        /// <param name="radius">Radius of the sphere</param>
+        /// <returns>Pointer to the created sphere geometry</returns>
+        public static IntPtr CreateSphereGeometry(float radius)
+        {
+            return Physx.CreateSphereGeometry(radius);
+        }
+
+        /// <summary>
         /// Creates a default material with standard properties.
         /// </summary>
         /// <returns>Pointer to the created material</returns>

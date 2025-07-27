@@ -146,6 +146,12 @@ namespace PhysX5ForUnity.Editor
                     body.gameObject.AddComponent<CapsuleCollider>();
                 }
                 
+                if (GUILayout.Button("Add Sphere Collider"))
+                {
+                    Undo.RecordObject(body.gameObject, "Add Sphere Collider");
+                    body.gameObject.AddComponent<SphereCollider>();
+                }
+
                 EditorGUILayout.Space();
             }
 

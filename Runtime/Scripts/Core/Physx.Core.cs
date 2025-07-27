@@ -108,6 +108,9 @@ namespace PhysX5ForUnity
         public static extern IntPtr CreateCapsuleGeometry(float radius, float halfHeight);
 
         [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateSphereGeometry(float radius);
+
+        [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreateShape(IntPtr geometry, IntPtr material, bool isExclusive);
         
         [DllImport(PHYSX_DLL)]
@@ -403,7 +406,7 @@ namespace PhysX5ForUnity
         static Physx()
         {
             // When using PhysX 5, disable the default Physics (PhysX 4) in Unity.
-            //Physics.simulationMode = SimulationMode.Script;
+            Physics.simulationMode = SimulationMode.Script;
             InitializeIfNecessary();
         }
 

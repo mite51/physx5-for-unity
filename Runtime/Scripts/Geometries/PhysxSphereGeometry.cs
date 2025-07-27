@@ -9,6 +9,7 @@ namespace PhysX5ForUnity
         public float Radius
         {
             get { return m_radius; }
+            set { m_radius = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
         }
 
         protected override void CreateGeometry()

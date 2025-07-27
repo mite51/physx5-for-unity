@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 65949fb3f3f00c04094dc97cc5db2c83, type: 3}
   m_Name: PhysXDefaultScene
   m_EditorClassIdentifier: 
-  m_gravity: {x: 0, y: -9.8, z: 0}
+  m_gravity: {x: 0, y: -9.81, z: 0}
   m_pruningStructureType: 1
   m_solverType: 1
   m_useGpu: 1

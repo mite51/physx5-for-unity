@@ -115,7 +115,7 @@ namespace PhysX5ForUnity
                 Matrix4x4 inverseTransformMatrix = transform.worldToLocalMatrix;
                 Parallel.For(0, verticesLength, i =>
                 {
-                    Vector4 p = m_particleData.PositionInvMass[m_originalToUniqueMap[i]];
+                    Vector4 p = m_particleData.PositionInvMass.Array[m_originalToUniqueMap[i]];
                     p.w = 1;
                     m_renderMeshVertices[i] = inverseTransformMatrix * p;
                 });

@@ -9,11 +9,19 @@ namespace PhysX5ForUnity
         public float Radius
         {
             get { return m_radius; }
+            set { m_radius = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
         }
 
         public float HalfHeight
         {
             get { return m_halfHeight; }
+            set { m_halfHeight = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
+        }
+
+        public int direction
+        {
+            get { return m_direction; }
+            set { m_direction = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
         }
 
         protected override void CreateGeometry()
@@ -27,15 +35,32 @@ namespace PhysX5ForUnity
         {
             Gizmos.color = Color.yellow;
 
-            Vector3 basePos = transform.position;
             float halfHeight = m_halfHeight;
-            Vector3 rightSphere = basePos + transform.right * halfHeight;
-            Vector3 leftSphere = basePos - transform.right * halfHeight;
+
+            Quaternion directionRotation = Quaternion.identity;
+            switch (m_direction)
+            {
+                case 0: // X-axis
+                    directionRotation = Quaternion.Euler(90, 0, 0);
+                    break;
+                case 1: // Y-axis
+                    directionRotation = Quaternion.Euler(0, 0, 90);
+                    break;
+                case 2: // Z-axis
+                    directionRotation = Quaternion.Euler(0, 90, 0);
+                    break;
+            }
+
+            Vector3 direction = (transform.rotation * directionRotation) * Vector3.forward;
+            Vector3 cylinderPos = transform.position - (direction * (halfHeight + (m_radius * 0.5f)));
+
+            Vector3 rightSphere = cylinderPos + (direction * halfHeight);
+            Vector3 leftSphere = cylinderPos - (direction * halfHeight);
 
             Gizmos.DrawWireSphere(rightSphere, m_radius);
             Gizmos.DrawWireSphere(leftSphere, m_radius);
 
-            DrawWireCylinder(basePos, transform.right, m_radius, halfHeight * 2);
+            DrawWireCylinder(cylinderPos, direction, m_radius, halfHeight * 2);
         }
 
         void DrawWireCylinder(Vector3 position, Vector3 direction, float radius, float height)
@@ -72,5 +97,7 @@ namespace PhysX5ForUnity
         private float m_radius = 0.5f;
         [SerializeField]
         private float m_halfHeight = 0.5f;
+        [SerializeField]
+        private int m_direction = 0;
     }
 }

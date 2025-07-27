@@ -9,6 +9,7 @@ namespace PhysX5ForUnity
         public Vector3 Size
         {
             get { return m_size; }
+            set { m_size = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
         }
 
         protected override void CreateGeometry()
