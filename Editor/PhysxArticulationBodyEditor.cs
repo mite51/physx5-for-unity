@@ -44,6 +44,9 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty xDriveTargetVelocity;
         private SerializedProperty xDriveLowerLimit;
         private SerializedProperty xDriveUpperLimit;
+        private SerializedProperty yDriveType;
+        private SerializedProperty zDriveType;
+        private SerializedProperty xDriveType;
         private SerializedProperty jointArmature;
         private SerializedProperty syncInitialPose;
 
@@ -93,6 +96,9 @@ namespace PhysX5ForUnity.Editor
             xDriveTargetVelocity = serializedObject.FindProperty("xDriveTargetVelocity");
             xDriveLowerLimit = serializedObject.FindProperty("xDriveLowerLimit");
             xDriveUpperLimit = serializedObject.FindProperty("xDriveUpperLimit");
+            yDriveType = serializedObject.FindProperty("yDriveType");
+            zDriveType = serializedObject.FindProperty("zDriveType");
+            xDriveType = serializedObject.FindProperty("xDriveType");
             jointArmature = serializedObject.FindProperty("jointArmature");
             syncInitialPose = serializedObject.FindProperty("syncInitialPose");
         }
@@ -197,6 +203,7 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(yDriveTargetVelocity, new GUIContent("Target Velocity"));
                 EditorGUILayout.PropertyField(yDriveLowerLimit, new GUIContent("Lower Limit"));
                 EditorGUILayout.PropertyField(yDriveUpperLimit, new GUIContent("Upper Limit"));
+                EditorGUILayout.PropertyField(yDriveType, new GUIContent("Drive Type"));
                 EditorGUI.indentLevel--;
             }
             
@@ -212,6 +219,7 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(zDriveTargetVelocity, new GUIContent("Target Velocity"));
                 EditorGUILayout.PropertyField(zDriveLowerLimit, new GUIContent("Lower Limit"));
                 EditorGUILayout.PropertyField(zDriveUpperLimit, new GUIContent("Upper Limit"));
+                EditorGUILayout.PropertyField(zDriveType, new GUIContent("Drive Type"));
                 EditorGUI.indentLevel--;
             }
             
@@ -227,6 +235,7 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(xDriveTargetVelocity, new GUIContent("Target Velocity"));
                 EditorGUILayout.PropertyField(xDriveLowerLimit, new GUIContent("Lower Limit"));
                 EditorGUILayout.PropertyField(xDriveUpperLimit, new GUIContent("Upper Limit"));
+                EditorGUILayout.PropertyField(xDriveType, new GUIContent("Drive Type"));
                 EditorGUI.indentLevel--;
             }
 

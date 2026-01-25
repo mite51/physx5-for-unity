@@ -205,6 +205,15 @@ namespace PhysX5ForUnity
         Spherical = 4,
 	}
 
+    public enum PxArticulationDriveType
+    {
+        Force = 0,
+        Acceleration = 1,
+        Target = 2,
+        Velocity = 3,
+        None = 4,
+    }
+
     public enum PxArticulationAxis
     {
 		Twist = 0,		//!< Rotational about eX

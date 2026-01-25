@@ -131,13 +131,22 @@ namespace PhysX5ForUnity
         [Tooltip("X-axis (twist) drive upper limit")]
         public float xDriveUpperLimit = 180f;
 
+        [Tooltip("Y-axis drive type")]
+        public PxArticulationDriveType yDriveType = PxArticulationDriveType.Force;
+
+        [Tooltip("Z-axis drive type")]
+        public PxArticulationDriveType zDriveType = PxArticulationDriveType.Force;
+
+        [Tooltip("X-axis (twist) drive type")]
+        public PxArticulationDriveType xDriveType = PxArticulationDriveType.Force;
+
         // Add this property with the other joint properties in the class
         [Tooltip("Joint armature (additional inertia for stabilization)")]
         [Range(0, 1)]
         public float jointArmature = 0.0f;
 
         [Tooltip("Synchronize the initial pose of the articulation links to match the GameObject hierarchy")]
-        public bool syncInitialPose = false;
+        public bool syncInitialPose = true;
 
         // Internal references
         private IntPtr m_articulation = IntPtr.Zero;
@@ -348,13 +357,12 @@ namespace PhysX5ForUnity
             PxTransformData pose = transform.ToPxLocalTransformData();//transform.ToPxTransformData();
             //PxTransformData pose = new PxTransformData(Vector3.zero, Quaternion.identity);
             NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, linkConnection, ref pose);
-
+/*
             // Create the shape for this body, Try to use Unity colliders
-            /*
             if (!CreateShapeFromUnityCollider())
             {
                 // Fallback to PhysxShape if no Unity colliders found
-                PhysxShape physxShape = GetComponent<PhysxShape>();
+                PhysxShape physxShape = GetComponentInChildren<PhysxShape>();
                 if (physxShape != null && physxShape.enabled)
                 {
                     // Use the existing PhysxShape
@@ -367,8 +375,7 @@ namespace PhysX5ForUnity
                     return;
                 }
             }
-            */
-
+*/
 
             if(NativeObjectPtr != IntPtr.Zero)
             {
@@ -386,6 +393,11 @@ namespace PhysX5ForUnity
                 // Set link properties
                 Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                 Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
+
+                PxTransformData root_pose = PxTransformData.FromTransform(transform);
+                root_pose.quaternion = Quaternion.identity;
+                Physx.SetArticulationRootGlobalPose(m_articulation, ref root_pose, false);    
+                //Physx.SetRigidActorPose(m_articulation, ref root_pose, false);
             }
 
         }
@@ -445,36 +457,35 @@ namespace PhysX5ForUnity
         {
 
         }
-
+/*
         private bool CreateShapeFromUnityCollider()
         {
             // Get all colliders from this object and valid children
             List<Collider> validColliders = new List<Collider>();
             CollectValidColliders(transform, validColliders);
             
-            Debug.Log($"Creating compound shape with {validColliders.Count} colliders [{gameObject.name}]");
-
-            if(validColliders.Count == 0)
+             PhysxShape physxShape = GetComponent<PhysxShape>();
+            if(validColliders.Count == 0 && physxShape == null)
             {
                 Debug.LogWarning($"No valid colliders found on {gameObject.name}");
                 return false;
             }
             
-            /* TODO: Implement compound shape creation, I dont think shapes need to be seperate components from geometries
-            for(int i = 0; i < validColliders.Count; i++)   
-            {
-                if(!CreateShapeFromCollider(validColliders[i]))
-                {
-                    return false;
-                }
-            }
-            */
+            //TODO: Implement compound shape creation, I dont think shapes need to be seperate components from geometries
+            //for(int i = 0; i < validColliders.Count; i++)   
+            //{
+            //    if(!CreateShapeFromCollider(validColliders[i]))
+            //    {
+            //        return false;
+            //    }
+            //}
+            
 
             CreateShapeFromCollider(validColliders[0]);
 
             return true;
         }
-
+*/
         /// <summary>
         /// Checks if this articulation body has valid Unity colliders (BoxCollider, CapsuleCollider, or SphereCollider)
         /// or a PhysxShape component.
@@ -500,8 +511,12 @@ namespace PhysX5ForUnity
         public bool HasValidColliders()
         {
             List<Collider> colliders = new List<Collider>();
-            CollectValidColliders(transform, colliders);
-            return colliders.Count > 0;
+            //CollectValidColliders(transform, colliders);
+            //return colliders.Count > 0;
+            PhysxGeometry[] geometries = transform.GetComponentsInChildren<PhysxGeometry>();                
+            PhysxShape[] shapes = transform.GetComponentsInChildren<PhysxShape>();                
+
+            return geometries.Length > 0 && shapes.Length > 0;            
         }
 
         private void CollectValidColliders(Transform current, List<Collider> colliders)
@@ -510,6 +525,8 @@ namespace PhysX5ForUnity
             if (current != transform && current.GetComponent<PhysxActor>() != null)
                 return;
 
+
+/*
             // Check for colliders on current object
             BoxCollider[] boxes = current.GetComponents<BoxCollider>();
             if (boxes != null)
@@ -543,8 +560,9 @@ namespace PhysX5ForUnity
             {
                 CollectValidColliders(child, colliders);
             }
+*/            
         }
-
+/*
         private bool CreateShapeFromCollider(Collider collider)
         {
             if (collider is BoxCollider boxCollider)
@@ -603,7 +621,7 @@ namespace PhysX5ForUnity
                 float radius = capsuleCollider.radius * radiusScale;
                 float halfHeight = (capsuleCollider.height * 0.5f) - radius;
                 capsuleGeometry.Radius = radius;
-                capsuleGeometry.HalfHeight = halfHeight;
+                capsuleGeometry.Height = halfHeight;
 
                 capsuleGeometry.Recreate();
                 
@@ -710,7 +728,7 @@ namespace PhysX5ForUnity
             }
             return false;
         }
-
+*/
         private void ConfigureJoint()
         {
             if (NativeObjectPtr == IntPtr.Zero)
@@ -851,15 +869,15 @@ namespace PhysX5ForUnity
             if (jointType == PxArticulationJointType.Spherical)
             {
                 // Update Y drive
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveStiffness, yDriveDamping, yDriveForceLimit);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveStiffness, yDriveDamping, yDriveForceLimit, yDriveType);
                 Physx.SetArticulationLinkJointDriveVelocity(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveTargetVelocity);
 
                 // Update Z drive
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing2, zDriveStiffness, zDriveDamping, zDriveForceLimit);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing2, zDriveStiffness, zDriveDamping, zDriveForceLimit, zDriveType);
                 Physx.SetArticulationLinkJointDriveVelocity(NativeObjectPtr, PxArticulationAxis.Swing2, zDriveTargetVelocity);
 
                 // Update X (twist) drive
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Twist, xDriveStiffness, xDriveDamping, xDriveForceLimit);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Twist, xDriveStiffness, xDriveDamping, xDriveForceLimit, xDriveType);
                 Physx.SetArticulationLinkJointDriveVelocity(NativeObjectPtr, PxArticulationAxis.Twist, xDriveTargetVelocity);
             }
         }

@@ -1,4 +1,5 @@
 # PhysX 5 for Unity
+*Built for PHYSX SDK 5.4.2.9950ad0d
 
 A Unity plugin for using PhysX 5 to simulate FEM soft bodies and PBD cloth and fluid.
 

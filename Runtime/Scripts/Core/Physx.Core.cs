@@ -241,6 +241,9 @@ namespace PhysX5ForUnity
         public static extern void GetRigidActorPose(IntPtr actor, out PxTransformData destPose);
 
         [DllImport(PHYSX_DLL)]
+        public static extern void SetRigidActorPose(IntPtr actor, ref PxTransformData destPose, bool autoawake);        
+
+        [DllImport(PHYSX_DLL)]
         public static extern IntPtr SetKinematicTarget(IntPtr actor, ref PxTransformData pose);
 
         [DllImport(PHYSX_DLL)]
@@ -575,7 +578,7 @@ namespace PhysX5ForUnity
         public static extern void SetArticulationJointLimitParams(IntPtr joint, PxArticulationAxis axis, float lower, float upper);
 
         [DllImport(PHYSX_DLL)]
-        public static extern void SetArticulationJointDriveParams(IntPtr joint, PxArticulationAxis axis, float stiffness, float damping, float maxForce);
+        public static extern void SetArticulationJointDriveParams(IntPtr joint, PxArticulationAxis axis, float stiffness, float damping, float maxForce, PxArticulationDriveType driveType);
 
         [DllImport(PHYSX_DLL)]
         public static extern void SetArticulationJointDriveTarget(IntPtr joint, PxArticulationAxis axis, float target);
@@ -603,14 +606,14 @@ namespace PhysX5ForUnity
         public static extern void WakeUpArticulation(IntPtr articulation);
 
         // New articulation link joint functions
-        public static void SetArticulationLinkJointDriveParams(IntPtr link, PxArticulationAxis axis, float stiffness, float damping, float maxForce)
+        public static void SetArticulationLinkJointDriveParams(IntPtr link, PxArticulationAxis axis, float stiffness, float damping, float maxForce, PxArticulationDriveType driveType)
         {
             // Get the joint from the link
             IntPtr joint = GetArticulationJoint(link);
             if (joint != IntPtr.Zero)
             {
                 // Call the joint drive params function
-                SetArticulationJointDriveParams(joint, axis, stiffness, damping, maxForce);
+                SetArticulationJointDriveParams(joint, axis, stiffness, damping, maxForce, driveType);
             }
         }
 /*
