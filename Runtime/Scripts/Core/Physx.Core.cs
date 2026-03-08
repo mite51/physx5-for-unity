@@ -558,6 +558,21 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern float GetArticulationLinkMaxAngularVelocity(IntPtr link);
 
+        [DllImport(PHYSX_DLL)]
+        public static extern Vector3 GetArticulationLinkLinearVelocity(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern Vector3 GetArticulationLinkAngularVelocity(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern Vector3 GetArticulationLinkCMassLocalPosition(IntPtr link);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationRootLinearVelocity(IntPtr articulation, ref Vector3 velocity, bool autowake);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetArticulationRootAngularVelocity(IntPtr articulation, ref Vector3 velocity, bool autowake);
+
         // Articulation Joint Configuration
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr GetArticulationJoint(IntPtr link);
@@ -765,6 +780,9 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void SetArticulationCacheJointForces(IntPtr cache, [In] float[] forces, uint bufferSize);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void UpdateArticulationKinematic(IntPtr articulation, uint flags);
 	}
 }
 

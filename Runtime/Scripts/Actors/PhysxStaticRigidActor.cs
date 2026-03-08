@@ -4,6 +4,7 @@ using UnityEngine;
 namespace PhysX5ForUnity
 {
     [AddComponentMenu("PhysX 5/Actors/PhysX Static Rigid Actor")]
+     [DefaultExecutionOrder(100)]
     public class PhysxStaticRigidActor : PhysxRigidActor
     {
         protected override void CreateNativeObject()

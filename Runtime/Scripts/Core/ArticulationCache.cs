@@ -66,7 +66,6 @@ namespace PhysX5ForUnity
         {
             CheckDisposed();
 
-            Debug.Log($"*** ApplyToArticulation {flags}");
             Physx.ApplyArticulationInternalStateCache(_nativeArticulation, _nativeCache, (uint)flags);
             
             // Optionally wake up the articulation
@@ -74,6 +73,12 @@ namespace PhysX5ForUnity
             {
                 Physx.WakeUpArticulation(_nativeArticulation);
             }
+        }
+
+        public void UpdateKinematic(PxArticulationKinematicFlags flags)
+        {
+            CheckDisposed();
+            Physx.UpdateArticulationKinematic(_nativeArticulation, (uint)flags);
         }
 
         #region Joint Positions
@@ -398,5 +403,12 @@ namespace PhysX5ForUnity
         eLINK_INCOMING_JOINT_FORCE = 1 << 10,
         /// <summary>All data</summary>
         eALL = 0xffffffff
+    }
+
+    [Flags]
+    public enum PxArticulationKinematicFlags : uint
+    {
+        ePOSITION = 1 << 0,
+        eVELOCITY = 1 << 1
     }
 } 
