@@ -80,6 +80,7 @@ namespace PhysX5ForUnity
 
             m_material.AddShape(this);
             m_geometry = GetComponent<PhysxGeometry>();
+            m_geometry.CreateOrGetSharedGeometry();
             if (isExclusive) CreateExclusiveShape();
             else CreateOrGetSharedShape();
         }

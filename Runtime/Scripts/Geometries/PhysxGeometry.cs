@@ -45,7 +45,7 @@ namespace PhysX5ForUnity
 #endif
         }
 
-        private void CreateOrGetSharedGeometry()
+        public void CreateOrGetSharedGeometry()
         {
             m_uniqueKey = GenerateUniqueKey();
             if (sm_sharedGeometries.TryGetValue(m_uniqueKey, out (IntPtr ptr, int refCount) entry))

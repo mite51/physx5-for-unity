@@ -3,8 +3,9 @@ using UnityEngine;
 
 namespace PhysX5ForUnity
 {
-    [RequireComponent(typeof(MeshRenderer))]
-    [RequireComponent(typeof(MeshFilter))]
+    // JW - Why are these required?
+    //[RequireComponent(typeof(MeshRenderer))]
+    //[RequireComponent(typeof(MeshFilter))]
     [AddComponentMenu("PhysX 5/Actors/PhysX Dynamic Rigid Actor")]
     public class PhysxDynamicRigidActor : PhysxRigidActor
     {

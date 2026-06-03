@@ -41,6 +41,10 @@ namespace PhysX5ForUnity
                 m_pxMesh = PhysxUtils.CreateBV33TriangleMesh(vertices.Length, ref vertices[0], indices.Length / 3, ref indices[0], false, false, true, false, false, m_buildGpuData, m_sdfSpacing, m_sdfSubgridSize, m_bitsPerSdfSubgridPixel);
                 m_nativeObjectPtr = PhysxUtils.CreatePxGeometry(PxGeometryType.TriangleMesh, 3, ref shapeParams[0], m_pxMesh);
             }
+            if(m_nativeObjectPtr == IntPtr.Zero)
+            {
+                throw new Exception("Failed to create triangle mesh geometry.");
+            }
         }
 
         protected override void DestroyGeometry()

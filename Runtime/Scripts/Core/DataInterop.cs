@@ -231,12 +231,12 @@ namespace PhysX5ForUnity
         Plane,
         Capsule,
         Box,
+        ConvexCore,
         ConvexMesh,
         ParticleSystem,
         TetrahedronMesh,
         TriangleMesh,
         HeightField,
-        HairSystem,
         Custom,
     }
 

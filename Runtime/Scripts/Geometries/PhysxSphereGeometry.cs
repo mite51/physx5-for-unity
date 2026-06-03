@@ -17,6 +17,10 @@ namespace PhysX5ForUnity
             float[] shapeParams = new float[1];
             shapeParams[0] = m_radius;
             m_nativeObjectPtr = PhysxUtils.CreatePxGeometry(PxGeometryType.Sphere, 1, ref shapeParams[0], IntPtr.Zero);
+            if(m_nativeObjectPtr == IntPtr.Zero)
+            {
+                throw new Exception("Failed to create sphere geometry.");
+            }
         }
 
         private void OnDrawGizmosSelected()

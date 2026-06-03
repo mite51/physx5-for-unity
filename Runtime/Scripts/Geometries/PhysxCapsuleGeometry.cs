@@ -37,6 +37,10 @@ namespace PhysX5ForUnity
             shapeParams[0] = m_radius;
             shapeParams[1] = m_height * 0.5f;
             m_nativeObjectPtr = PhysxUtils.CreatePxGeometry(PxGeometryType.Capsule, 2, ref shapeParams[0], IntPtr.Zero);
+            if(m_nativeObjectPtr == IntPtr.Zero)
+            {
+                throw new Exception("Failed to create capsule geometry.");
+            }
         }
         void OnDrawGizmosSelected()
         {

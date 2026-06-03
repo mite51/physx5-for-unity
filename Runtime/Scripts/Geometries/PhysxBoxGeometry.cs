@@ -19,6 +19,10 @@ namespace PhysX5ForUnity
             shapeParams[1] = m_size.y / 2;
             shapeParams[2] = m_size.z / 2;
             m_nativeObjectPtr = PhysxUtils.CreatePxGeometry(PxGeometryType.Box, 3, ref shapeParams[0], IntPtr.Zero);
+            if(m_nativeObjectPtr == IntPtr.Zero)
+            {
+                throw new Exception("Failed to create box geometry.");
+            }
         }
 
         private void OnDrawGizmosSelected()

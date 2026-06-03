@@ -307,6 +307,15 @@ namespace PhysX5ForUnity
                         //Physx.SetArticulationStabilizationThreshold(childBody.m_joint, stabilizationThreshold);
                     }
                 }
+                /*
+                foreach (PhysxArticulationBody childBody in m_linkBodies)
+                {
+                    if(childBody.IsRoot == false)
+                    {
+                        childBody.ConfigureJoint();
+                    }                    
+                }
+                */
 
                 // Add the articulation to the scene
                 if(Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
@@ -348,8 +357,8 @@ namespace PhysX5ForUnity
 
                         //also set the drive targets
                         link_body.xDriveTarget = -reduced_coordinates.x * Mathf.Rad2Deg;
-                        link_body.yDriveTarget = -reduced_coordinates.z * Mathf.Rad2Deg;
-                        link_body.zDriveTarget = -reduced_coordinates.y * Mathf.Rad2Deg;
+                        link_body.yDriveTarget = -reduced_coordinates.y * Mathf.Rad2Deg;
+                        link_body.zDriveTarget = -reduced_coordinates.z * Mathf.Rad2Deg;
                         link_body.UpdateJointTargets();
                     }
                     cache.SetJointPositions(joint_positions);
@@ -420,7 +429,6 @@ namespace PhysX5ForUnity
 
             // Create the link - the pose here really doesn't have any effect, the anchor points are what matter
             PxTransformData pose = transform.ToPxLocalTransformData();//transform.ToPxTransformData();
-            //PxTransformData pose = new PxTransformData(Vector3.zero, Quaternion.identity);
             NativeObjectPtr = Physx.CreateArticulationLink(m_articulation, linkConnection, ref pose);
 
             // Attach shapes from this object and its children (stopping at other PhysxActors)
@@ -435,21 +443,20 @@ namespace PhysX5ForUnity
                 
                 if (IsRoot == false)
                 {             
-                    m_joint = Physx.GetArticulationJoint(NativeObjectPtr);
-                    if (m_joint != IntPtr.Zero)
-                    {
-                        ConfigureJoint();
-                    }
+                    ConfigureJoint();
                 }
 
                 // Set link properties
                 Physx.SetArticulationLinkLinearDamping(NativeObjectPtr, linearDamping);
                 Physx.SetArticulationLinkAngularDamping(NativeObjectPtr, angularDamping);
 
-                PxTransformData root_pose = PxTransformData.FromTransform(transform);
-                root_pose.quaternion = Quaternion.identity;
-                Physx.SetArticulationRootGlobalPose(m_articulation, ref root_pose, false);    
-                //Physx.SetRigidActorPose(m_articulation, ref root_pose, false);
+                if(IsRoot)
+                {
+                    PxTransformData root_pose = PxTransformData.FromTransform(transform);
+                    //root_pose.quaternion = Quaternion.identity;
+                    Physx.SetArticulationRootGlobalPose(m_articulation, ref root_pose, false);    
+                    //Physx.SetRigidActorPose(m_articulation, ref root_pose, false);
+                }
             }
 
         }
@@ -668,105 +675,26 @@ namespace PhysX5ForUnity
             }
         }
 
-        /// <summary>
-        /// Compute corrected angular and linear velocities for all links via forward
-        /// kinematics in a single pass. Mirrors the verified ComputeForwardVelocityKinematics
-        /// from DebugPlaybackController, reading from PhysX state instead of recording data.
-        ///
-        /// Cache DOFs are in PhysX's Y-up left-handed convention (negated + Y/Z swapped
-        /// relative to the raw Z-up recording). Negate all three components to recover the
-        /// right-handed angular velocity that matches the verified FK formula:
-        ///   dofStart = (GetJointIndex() - 1) * 3
-        ///   ω_rel_child = (-cache[0], -cache[1], -cache[2])
-        ///   ω_world[i]  = ω_world[parent] + R_child * ω_rel_child
-        ///
-        /// Linear velocity (body-origin FK with COM correction):
-        ///   v_origin[i] = v_origin[parent] - ω_world[parent] × (pos[i] - pos[parent])
-        ///   v_com[i]    = v_origin[i] - ω_world[i] × (R[i] * comLocal[i])
-        /// </summary>
-        private void ComputeCorrectedVelocities(int linkCount, float[] dofVelocities)
-        {
-            if (linkCount <= 0 || dofVelocities == null) return;
-
-
-            Vector3[] angVel    = new Vector3[linkCount];
-            Vector3[] originVel = new Vector3[linkCount];
-
-            var bodyToIndex = new Dictionary<PhysxArticulationBody, int>(linkCount);
-            for (int i = 0; i < linkCount; i++)
-                bodyToIndex[m_linkBodies[i]] = i;
-
-            // Root: use native velocities directly
-            angVel[0] = m_linkBodies[0]._angularVelocity;
-            m_linkBodies[0]._correctedAngularVelocity = angVel[0];
-            m_linkBodies[0]._correctedLinearVelocity  = m_linkBodies[0]._linearVelocity;
-
-            Quaternion rot0 = m_linkBodies[0].transform.rotation;
-            Vector3 comLocal0 = m_linkBodies[0].GetCMassLocalPosition();
-            Vector3 comWorld0 = rot0 * comLocal0;
-            originVel[0] = m_linkBodies[0]._linearVelocity + Vector3.Cross(angVel[0], comWorld0);
-
-            //string debug = $"*** ComputeCorrectedVelocities linkCount = {linkCount}";
-            for (int i = 1; i < linkCount; i++)
-            {
-                PhysxArticulationBody parent = m_linkBodies[i].m_parentBody;
-                if (parent == null || !bodyToIndex.TryGetValue(parent, out int parentIdx))
-                {
-                    angVel[i] = m_linkBodies[i]._angularVelocity;
-                    m_linkBodies[i]._correctedAngularVelocity = angVel[i];
-                    m_linkBodies[i]._correctedLinearVelocity  = m_linkBodies[i]._linearVelocity;
-                    originVel[i] = m_linkBodies[i]._linearVelocity;
-                    //debug += $"\nBody {i} no parent";
-                    continue;
-                }
-
-                // --- Angular velocity from DOFs ---
-                int dofStart = (int)(m_linkBodies[i].m_jointIndex - 1) * 3;
-                if (dofStart + 2 >= dofVelocities.Length)
-                {
-                    angVel[i] = m_linkBodies[i]._angularVelocity;
-                    m_linkBodies[i]._correctedAngularVelocity = angVel[i];
-                    m_linkBodies[i]._correctedLinearVelocity  = m_linkBodies[i]._linearVelocity;
-                    originVel[i] = m_linkBodies[i]._linearVelocity;
-                    //debug += $"\nBody {i} no DOF";
-                    continue;
-                }
-
-                Vector3 omegaRelChild = new Vector3(
-                    -dofVelocities[dofStart + 0],
-                    -dofVelocities[dofStart + 1],
-                    -dofVelocities[dofStart + 2]);
-                Quaternion childRot = m_linkBodies[i].transform.rotation;
-                Vector3 omegaRelWorld = childRot * omegaRelChild;
-                angVel[i] = angVel[parentIdx] + omegaRelWorld;
-                m_linkBodies[i]._correctedAngularVelocity = angVel[i];
-
-                // --- Linear velocity from FK ---
-                Vector3 posI = m_linkBodies[i].transform.position;
-                Vector3 posP = m_linkBodies[parentIdx].transform.position;
-                originVel[i] = originVel[parentIdx] - Vector3.Cross(angVel[parentIdx], posI - posP);
-
-                Vector3 comLocalI = m_linkBodies[i].GetCMassLocalPosition();
-                Vector3 comWorldI = childRot * comLocalI;
-                m_linkBodies[i]._correctedLinearVelocity = originVel[i] - Vector3.Cross(angVel[i], comWorldI);
-                //debug += $"\nBody {i} correctedLinearVelocity = {m_linkBodies[i]._correctedLinearVelocity}";
-            }
-            //Debug.Log(debug);
-        }
-
-
         public new void FixedUpdate()
         {
             if (m_initialized)
             {
                 if(IsRoot)
                 {
+                    PxTransformData mainPose;
+                    Physx.GetRigidActorPose(m_nativeObjectPtr, out mainPose);
+                    transform.position = mainPose.position;
+                    transform.rotation = mainPose.quaternion;
+
+                    _linearVelocity = Physx.GetLinearVelocity(m_nativeObjectPtr);
+                    _angularVelocity = Physx.GetAngularVelocity(m_nativeObjectPtr);
+
                     uint nbLinks = Physx.GetArticulationLinkCount(m_articulation);
 
                     if(nbLinks > 0)
                     {
                         int min_count = (int)Math.Min((int)nbLinks, m_linkBodies.Count);
-                        for(int i = 0; i < min_count; i++)
+                        for(int i = 1; i < min_count; i++)
                         {
                             IntPtr linkPtr = m_linkBodies[i].NativeObjectPtr;
 
@@ -790,7 +718,6 @@ namespace PhysX5ForUnity
                             if (m_dofVelocityBuffer == null || m_dofVelocityBuffer.Length != m_velocityCache.DegreesOfFreedom)
                                 m_dofVelocityBuffer = new float[m_velocityCache.DegreesOfFreedom];
                             m_velocityCache.GetJointVelocities(m_dofVelocityBuffer);
-                            ComputeCorrectedVelocities(min_count, m_dofVelocityBuffer);
                         }
                     }
                 }
@@ -846,7 +773,7 @@ namespace PhysX5ForUnity
                 yDriveForceLimit = 500.0f;
                 zDriveForceLimit = 500.0f;
                 xDriveForceLimit = 500.0f;
-                
+
                 // Update Y drive
                 Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveStiffness, yDriveDamping, yDriveForceLimit, yDriveType);
                 Physx.SetArticulationLinkJointDriveVelocity(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveTargetVelocity);
@@ -860,9 +787,9 @@ namespace PhysX5ForUnity
                 Physx.SetArticulationLinkJointDriveVelocity(NativeObjectPtr, PxArticulationAxis.Twist, xDriveTargetVelocity);
 
                 //HACK 
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.X, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.Target);
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Y, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.Target);
-                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Z, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.Target);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.X, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.None);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Y, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.None);
+                Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Z, 0.0f, 0.0f, 0.0f, PxArticulationDriveType.None);
             }
         }
 

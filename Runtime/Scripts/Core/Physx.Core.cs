@@ -80,6 +80,9 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern void StepPhysicsFetchResults();
 
+        [DllImport(PHYSX_DLL)]
+        public static extern void FlushPVD();
+
         /// <summary>
         /// Release a PhysX scene
         /// </summary>
@@ -683,12 +686,6 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void PutArticulationToSleep(IntPtr articulation);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void SetArticulationMaxCOMLinearVelocity(IntPtr articulation, float maxLinearVelocity);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void SetArticulationMaxCOMAngularVelocity(IntPtr articulation, float maxAngularVelocity);
 
         // Articulation Cache Management
         [DllImport(PHYSX_DLL)]
