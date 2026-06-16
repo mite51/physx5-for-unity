@@ -109,6 +109,18 @@ namespace PhysX5ForUnity.Editor
 
             EditorGUILayout.LabelField("Articulation Body", EditorStyles.boldLabel);
             
+            PhysxArticulationBody body = (PhysxArticulationBody)target;
+            if (!body.HasValidShapes())
+            {
+                EditorGUILayout.HelpBox(
+                    "This articulation body requires at least one PhysxShape component with an assigned PhysxGeometry " +
+                    "on itself or one of its children (excluding children that have their own PhysxActor components).",
+                    MessageType.Warning
+                );
+
+                EditorGUILayout.Space();
+            }
+
             // Basic properties
             EditorGUILayout.PropertyField(scene);
             EditorGUILayout.PropertyField(mass);
@@ -128,37 +140,6 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(stabilizationThreshold, new GUIContent("Stabilization Threshold", "Threshold below which the articulation may go to sleep"));
                 EditorGUILayout.PropertyField(syncInitialPose, new GUIContent("Sync Initial Pose", "Initialize articulation links to match the game object hierarchy positions"));
                 EditorGUI.indentLevel--;
-            }
-
-            // Check if valid colliders are present
-            PhysxArticulationBody body = (PhysxArticulationBody)target;
-            if (!body.HasValidColliders())
-            {
-                EditorGUILayout.HelpBox(
-                    "This articulation body requires at least one BoxCollider or CapsuleCollider component on itself or its children " +
-                    "(excluding children that have their own PhysxActor components).", 
-                    MessageType.Warning
-                );
-                
-                if (GUILayout.Button("Add Box Collider"))
-                {
-                    Undo.RecordObject(body.gameObject, "Add Box Collider");
-                    body.gameObject.AddComponent<BoxCollider>();
-                }
-                
-                if (GUILayout.Button("Add Capsule Collider"))
-                {
-                    Undo.RecordObject(body.gameObject, "Add Capsule Collider");
-                    body.gameObject.AddComponent<CapsuleCollider>();
-                }
-                
-                if (GUILayout.Button("Add Sphere Collider"))
-                {
-                    Undo.RecordObject(body.gameObject, "Add Sphere Collider");
-                    body.gameObject.AddComponent<SphereCollider>();
-                }
-
-                EditorGUILayout.Space();
             }
 
             // Joint settings

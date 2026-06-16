@@ -509,31 +509,19 @@ namespace PhysX5ForUnity
         }
 
         /// <summary>
-        /// Checks if this articulation body has valid PhysxShape components on itself or its children
-        /// (stopping at other PhysxActor components).
+        /// Checks if this articulation body has valid PhysxShape components with an assigned
+        /// PhysxGeometry on itself or its children (stopping at other PhysxActor components).
+        /// Works in edit mode (the runtime Geometry reference is only populated on Awake).
         /// </summary>
-        /// <returns>True if valid PhysxShape components are found, false otherwise</returns>
-        public bool HasValidShape()
+        /// <returns>True if at least one shape with a geometry is found, false otherwise</returns>
+        public bool HasValidShapes()
         {
             List<PhysxShape> shapes = new List<PhysxShape>();
             CollectChildShapes(transform, shapes);
-            return shapes.Count > 0;
-        }
 
-        /// <summary>
-        /// Checks if this articulation body has valid PhysxShape components with PhysxGeometry
-        /// on itself or its children (stopping at other PhysxActor components).
-        /// </summary>
-        /// <returns>True if valid shapes with geometries are found, false otherwise</returns>
-        public bool HasValidColliders()
-        {
-            List<PhysxShape> shapes = new List<PhysxShape>();
-            CollectChildShapes(transform, shapes);
-            
-            // Check that at least one shape has a valid geometry
             foreach (PhysxShape shape in shapes)
             {
-                if (shape.Geometry != null)
+                if (shape != null && shape.GetComponent<PhysxGeometry>() != null)
                     return true;
             }
             return false;
