@@ -54,7 +54,11 @@ namespace PhysX5ForUnity
 
         protected override string GenerateUniqueKey()
         {
-            return $"g_box_{m_size}";
+            // Use per-component float formatting (full precision) rather than
+            // Vector3.ToString(), which rounds to ~2 decimals and makes distinct boxes
+            // (e.g. the two SMPL toes 0.0992x0.0956x0.04 vs 0.0986x0.0958x0.0432) collide
+            // on the same key, causing them to silently share one cached PxBoxGeometry.
+            return $"g_box_{m_size.x:R}_{m_size.y:R}_{m_size.z:R}";
         }
 
         [SerializeField]

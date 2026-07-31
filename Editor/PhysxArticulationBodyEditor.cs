@@ -15,6 +15,7 @@ namespace PhysX5ForUnity.Editor
         private SerializedProperty disableSelfCollision;
         private SerializedProperty solverIterationCount;
         private SerializedProperty stabilizationThreshold;
+        private SerializedProperty sleepThreshold;
         private SerializedProperty jointType;
         private SerializedProperty parentAnchorPosition;
         private SerializedProperty parentAnchorRotation;
@@ -67,6 +68,7 @@ namespace PhysX5ForUnity.Editor
             disableSelfCollision = serializedObject.FindProperty("disableSelfCollision");
             solverIterationCount = serializedObject.FindProperty("solverIterationCount");
             stabilizationThreshold = serializedObject.FindProperty("stabilizationThreshold");
+            sleepThreshold = serializedObject.FindProperty("sleepThreshold");
             jointType = serializedObject.FindProperty("jointType");
             parentAnchorPosition = serializedObject.FindProperty("parentAnchorPosition");
             parentAnchorRotation = serializedObject.FindProperty("parentAnchorRotation");
@@ -137,7 +139,8 @@ namespace PhysX5ForUnity.Editor
                 EditorGUILayout.PropertyField(driveLimitsAreForces);
                 EditorGUILayout.PropertyField(disableSelfCollision);
                 EditorGUILayout.PropertyField(solverIterationCount);
-                EditorGUILayout.PropertyField(stabilizationThreshold, new GUIContent("Stabilization Threshold", "Threshold below which the articulation may go to sleep"));
+                EditorGUILayout.PropertyField(stabilizationThreshold, new GUIContent("Stabilization Threshold", "Threshold below which the articulation may participate in stabilization"));
+                EditorGUILayout.PropertyField(sleepThreshold, new GUIContent("Sleep Threshold", "Threshold below which the articulation may go to sleep (0 disables sleeping)"));
                 EditorGUILayout.PropertyField(syncInitialPose, new GUIContent("Sync Initial Pose", "Initialize articulation links to match the game object hierarchy positions"));
                 EditorGUI.indentLevel--;
             }

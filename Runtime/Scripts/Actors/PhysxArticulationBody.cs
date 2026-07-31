@@ -41,6 +41,10 @@ namespace PhysX5ForUnity
         [Range(0.0f, 10000.0f)]
         public float stabilizationThreshold = 10.0f;
 
+        [Tooltip("Mass-normalized kinetic energy threshold below which the articulation may go to sleep. PhysX default is 0.005; set to 0 to disable sleeping (e.g. to match a reference implementation).")]
+        [Range(0.0f, 10000.0f)]
+        public float sleepThreshold = 0.005f;
+
         // Joint properties
         [Header("Joint Properties")]
         [Tooltip("Type of articulation joint")]
@@ -333,6 +337,9 @@ namespace PhysX5ForUnity
 
                 // Set stabilization threshold
                 Physx.SetArticulationStabilizationThreshold(m_articulation, stabilizationThreshold);
+
+                // Set sleep threshold
+                Physx.SetArticulationSleepThreshold(m_articulation, sleepThreshold);
 
                 //
                 Physx.SetArticulationSolverIterationCounts(m_articulation, (uint)solverIterationCount, (uint)solverIterationCount);
@@ -746,6 +753,7 @@ namespace PhysX5ForUnity
                     if (IsRoot && m_articulation != IntPtr.Zero)
                     {
                         Physx.SetArticulationStabilizationThreshold(m_articulation, stabilizationThreshold);
+                        Physx.SetArticulationSleepThreshold(m_articulation, sleepThreshold);
                     }
                 }
             }
@@ -757,10 +765,16 @@ namespace PhysX5ForUnity
 
             if (jointType == PxArticulationJointType.Spherical)
             {
-                //HACK
+
+                // PhysX articulation joints operate in RADIANS, so drive stiffness
+                // (N.m/rad), damping (N.m.s/rad) and force limit (N.m) are passed
+                // straight through - no deg<->rad scaling. The C# target setter
+                // (SetArticulationLinkJointDriveTarget) already converts deg->rad.
+                // The force limit is the IsaacLab/ProtoMotions effort limit (500 N.m).
                 yDriveForceLimit = 500.0f;
                 zDriveForceLimit = 500.0f;
                 xDriveForceLimit = 500.0f;
+
 
                 // Update Y drive
                 Physx.SetArticulationLinkJointDriveParams(NativeObjectPtr, PxArticulationAxis.Swing1, yDriveStiffness, yDriveDamping, yDriveForceLimit, yDriveType);
