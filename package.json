@@ -33,6 +33,11 @@
         "displayName": "Soft Body",
         "description": "Sample scenes for soft body",
         "path": "Samples/Soft Body"
+      },
+      {
+        "displayName": "Vehicle",
+        "description": "Direct-drive and engine-drive PhysX Vehicle2 sample scenes",
+        "path": "Samples/Vehicle"
       }
   ]
 }

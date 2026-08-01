@@ -1,9 +1,21 @@
 # PhysX 5 for Unity
 *Built for PHYSX SDK 5.4.2.9950ad0d
 
-A Unity plugin for using PhysX 5 to simulate FEM soft bodies and PBD cloth and fluid.
+A Unity plugin for using PhysX 5 to simulate FEM soft bodies, PBD cloth and fluid, rigid bodies, articulations and vehicles.
 
 This is a basic implementation with many features missing, such as collision filtering and scene query.
+
+## Vehicles (PhysX Vehicle2)
+
+Vehicles are authored with an Omniverse-style component model. Reusable parts are `ScriptableObject` assets created from the `Assets → Create → PhysX 5/Vehicle/*` menu:
+
+- `PhysxVehicleWheel`, `PhysxVehicleTire`, `PhysxVehicleSuspension`
+- `PhysxVehicleEngine`, `PhysxVehicleGearbox`, `PhysxVehicleAutobox`, `PhysxVehicleClutch`
+- `PhysxVehicleTireFrictionTable`
+
+A vehicle is a `PhysxVehicle` chassis component with one `PhysxVehicleWheelAttachment` per wheel (as child GameObjects) referencing those assets. Driving is done either through a `PhysxVehicleController` (throttle / brake / steer / gears, plus tank thrusts) or, for raw per-wheel control, by adding a `PhysxVehicleWheelController` to each wheel (this automatically switches the vehicle to direct wheel control). All three PhysX drive models are supported: **Direct** (Omniverse `DriveBasic`), **Engine** (Omniverse `DriveStandard`, with multi-wheel / four-wheel / tank differentials) and raw per-wheel control.
+
+See the **Vehicle** sample (`Samples/Vehicle`) for direct-drive and engine-drive demo scenes. Note that the legacy robot layer (`PhysxArticulationRobot` / `PhysxArticulationKinematicTree`) has been removed; use `PhysxArticulationBody` for articulations.
 
 ## Installation
 

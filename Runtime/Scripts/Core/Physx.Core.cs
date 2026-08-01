@@ -144,9 +144,6 @@ namespace PhysX5ForUnity
         public static extern void RemovePBDObjectFromParticleSystem(IntPtr particleSystemObject);
 
         [DllImport(PHYSX_DLL)]
-        public static extern void AddArticulationToScene(IntPtr articulation);
-
-        [DllImport(PHYSX_DLL)]
         public static extern void RemoveArticulationFromScene(IntPtr articulation);
 
 
@@ -298,116 +295,6 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void ReleaseMesh(IntPtr mesh);
-
-        // Robotics
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr CreateArticulationKinematicTree(IntPtr scene, bool fixBase, bool disableSelfCollision);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr CreateArticulationKinematicTreeBase(IntPtr kinematicTree, ref PxTransformData basePose, IntPtr geometry, float density);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr AddLinkToArticulationKinematicTree(
-            IntPtr kinematicTree,
-            IntPtr parentLink,
-            ref PxTransformData linkPose,
-            PxRobotJointType type,
-            ref PxTransformData jointPoseParent,
-            ref PxTransformData jointPoseChild,
-            PxArticulationAxis dofAxis,
-            IntPtr geometry,
-            float jointLimLower,
-            float jointLimUpper,
-            bool isDriveJoint,
-            float stiffness,
-            float damping,
-            float driveMaxForce,
-            float density
-        );
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void ResetArticulationKinematicTree(IntPtr kinematicTree);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void DriveArticulationKinematicTreeJoints(IntPtr kinematicTree, ref float targetJointPositions);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void ReleaseArticulationKinematicTree(IntPtr kinematicTree);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetArticulationKinematicTreeJointPositions(IntPtr kinematicTree, ref float destArray, int length);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetArticulationKinematicTreeLinkPoses(IntPtr kinematicTree, ref PxTransformData destArray, int length);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr CreateArticulationRobot(IntPtr scene, ref PxTransformData basePose, float density);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void ResetArticulationRobot(IntPtr robot);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr AddLinkToRobot(
-            IntPtr robot,
-            ref PxTransformData linkPose,
-            PxRobotJointType type,
-            ref PxTransformData jointPoseParent,
-            ref PxTransformData jointPoseChild,
-            IntPtr geometry,
-            float jointLimLower,
-            float jointLimUpper,
-            float stiffness,
-            float damping,
-            float driveMaxForce,
-            float density
-        );
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr AddEndEffectorLinkToRobot(
-            IntPtr robot,
-            ref PxTransformData linkPose,
-            PxRobotJointType type,
-            ref PxTransformData jointPoseParent,
-            ref PxTransformData jointPoseChild,
-            IntPtr geometry,
-            float jointLimLower,
-            float jointLimUpper,
-            float stiffness,
-            float damping,
-            float driveMaxForce,
-            float density
-        );
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void ReleaseArticulationRobot(IntPtr robot);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void DriveJoints(IntPtr robot, ref float targetJointPositions);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetRobotLinkPoses(IntPtr robot, ref PxTransformData destArray, int length);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern IntPtr GetRobotJointPositions(IntPtr robot, ref float jointPositions, int length);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetRobotLinkIncomingForce(IntPtr robot, int n, out PxSpatialForceData dest);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetRobotForwardKinematics(IntPtr robot, ref float q, out Matrix4x4 dest);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetRobotJacobianBody(IntPtr robot, ref float q, ref float destArray, int rows, int cols);
-
-        [DllImport(PHYSX_DLL)]
-        public static extern void GetRobotJacobianSpatial(IntPtr robot, ref float q, ref float destArray, int rows, int cols);
-
-        /// <summary>
-        /// Robot inverse kinematics. The target EE transform is regarding the last joint's transform
-        /// </summary>
-        [DllImport(PHYSX_DLL)]
-        public static extern bool GetRobotInverseKinematics(IntPtr robot, ref float qInit, ref PxTransformData targetTransformEEJoint, float tolerance, int numIterations, float lambda);
 
         static Physx()
         {

@@ -49,11 +49,6 @@ namespace PhysX5ForUnity
                 actor.OnBeforeDestroy -= RemoveParticleRigidFilters;
                 actor.OnBeforeDestroy += RemoveParticleRigidFilters;
             }
-            else if (rigidActor is PhysxArticulationLinkBase link)
-            {
-                link.ArticulationKinematicTree.OnBeforeDestroy -= RemoveParticleRigidFilters;
-                link.ArticulationKinematicTree.OnBeforeDestroy += RemoveParticleRigidFilters;
-            }
         }
 
         public void RemoveParticleRigidFilter(ParticleRigidFilterPair particleRigidFilterPair)

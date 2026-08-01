@@ -114,7 +114,7 @@ namespace PhysX5ForUnity
     public struct ParticleRigidFilterPair
     {
         public int ParticleIndex;
-        public PhysxNativeGameObjectBase RigidActor; // some hack to allow PhysxArticulationLink to be used as well
+        public PhysxNativeGameObjectBase RigidActor; // some hack to allow PhysxArticulationBody to be used as well
         public ParticleRigidFilterPair(int particleIndex, PhysxNativeGameObjectBase rigidActor)
         {
             ParticleIndex = particleIndex;
@@ -189,21 +189,6 @@ namespace PhysX5ForUnity
         public IntPtr positionInvMass;
         public IntPtr velocity;
     };
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct PxSpatialForceData
-    {
-        public Vector3 force;
-        public Vector3 torque;
-    };
-
-    public enum PxRobotJointType
-    {
-        Fix = 0,
-        Prismatic = 1,
-        Revolute = 2,
-        Spherical = 4,
-	}
 
     public enum PxArticulationDriveType
     {
