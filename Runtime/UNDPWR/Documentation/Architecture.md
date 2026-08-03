@@ -116,16 +116,20 @@ catch-up (§9).
 
 ```
    your game
-       │  ISimStepHandler          (forces, spawns, steering — §10)
-       │  SimInput                 (what you send)
+       │  ISimGameMode, SimGameEntity   (rules, entities — Gameplay.md)
        ▼
 ┌──────────────────────────────────────────────────────────┐
-│  Rollback/       RollbackEngine, InputBuffer, SimInput    │  when to step,
-│                                                           │  what to replay
+│  Gameplay/       SimGameHost, entities + pool, actions,   │  a game over
+│                  game modes, players, camera-relative     │  the engine
+│                  input, presentation binding              │
+│                  (single ISimStepHandler + ISimStateProvider)
+├──────────────────────────────────────────────────────────┤
+│  Rollback/       RollbackEngine, InputBuffer, SimInput,   │  when to step,
+│                  ISimStepHandler, ISimStateProvider       │  what to replay
 ├──────────────────────────────────────────────────────────┤
 │  Core/           DeterministicWorld, SimEntity,           │  what exists,
 │                  StableIdAllocator, SnapshotRing,         │  what state it has
-│                  SimConfig, SimMass                       │
+│                  SimConfig, SimMass, SimStateWriter/Reader│  (3 channels)
 ├──────────────────────────────────────────────────────────┤
 │  Interop/        NativeMethods, NativeTypes  (internal)   │  P/Invoke only
 └──────────────────────────────────────────────────────────┘
@@ -139,9 +143,11 @@ catch-up (§9).
 ```
 
 The dependency direction is strictly downward. `Core` knows nothing about ticks or
-rollback; `Rollback` knows nothing about P/Invoke. `Interop` is `internal` on purpose:
-calling it directly bypasses the stable-ID ordering in §4, which is the single easiest way
-to produce a desync that looks like a physics bug.
+rollback; `Rollback` knows nothing about P/Invoke or gameplay; `Gameplay` is optional and
+sits entirely above the engine, reaching state through `ISimStateProvider` and the step
+through `ISimStepHandler`. `Interop` is `internal` on purpose: calling it directly bypasses
+the stable-ID ordering in §4, which is the single easiest way to produce a desync that looks
+like a physics bug.
 
 `Diagnostics/SimLog` is orthogonal and used by every layer, including the native one, which
 routes its messages up through a callback.
@@ -201,9 +207,23 @@ mid-session must be agreed by every peer, which is a much bigger commitment than
 
 ## 5. State: what a snapshot is
 
+A snapshot has three channels, captured and restored together every tick and hashed
+separately so a mismatch can be attributed to one of them:
+
+- **Physics** — the opaque native blob described in §5.1, hashed natively.
+- **Entity** — per-entity managed state (health, timers, an AI target), written in stable-ID
+  order through `SimStateWriter`. Empty for a world driven without the gameplay layer.
+- **Game** — the game mode's own state and the pending action log, also through
+  `SimStateWriter`.
+
+The two managed channels exist so gameplay state survives a rewind the same way physics does;
+they are supplied by an optional `ISimStateProvider` (the gameplay layer's `SimGameHost`) and
+are the subject of [Gameplay.md](Gameplay.md). The rest of this section is the physics channel,
+which is the one with the hard determinism constraints.
+
 ### 5.1 Contents
 
-A snapshot is an opaque byte blob produced by the native layer. Per entity it holds:
+The physics channel is an opaque byte blob produced by the native layer. Per entity it holds:
 
 - **Rigid dynamic / kinematic** — world pose, linear and angular velocity, rest counter,
   sleeping flag, disabled flag.
@@ -265,6 +285,12 @@ Two granularities, both FNV-1a and both computed natively so managed and native 
 
 Whole-world hashes are what peers exchange. Per-entity hashes are what you pull when one
 mismatches.
+
+When the gameplay layer is present, the entity and game channels each fold their bytes into a
+hash of their own, and `Snapshot.CombinedHash` folds all three together — so a mismatch first
+tells you *physics*, *entity* or *game* before you drill into which entity. The managed
+channel hashes use the same FNV-1a as the native ones, so they are comparable across peers the
+same way.
 
 ### 5.5 The snapshot ring
 
@@ -505,6 +531,12 @@ void OnBeforeStep(DeterministicWorld world, int tick, SimInputFrame inputs, bool
 void OnAfterStep (DeterministicWorld world, int tick, bool isReplay);
 ```
 
+A game can implement this directly for simple cases, but the `Gameplay/` layer is the
+intended route: it provides one `ISimStepHandler` — `SimGameHost` — for the whole game, with
+entities, an action queue, a game mode and players layered above it and a fixed per-tick
+order baked in. Gameplay state that must survive a rewind rides in the entity and game
+channels through the paired `ISimStateProvider` (§5). See [Gameplay.md](Gameplay.md).
+
 **Why it must all go through here:** a rollback replays ticks. A force applied outside this
 callback happens on the original pass and not on the replay, which desyncs a peer against
 *itself* — usually the most confusing class of bug in this kind of system.
@@ -527,11 +559,15 @@ session start, not from each object's own initialisation.
 ## 11. Presentation
 
 The simulation runs at a fixed tick rate; rendering does not. Read poses with
-`DeterministicWorld.ReadPoses()` and interpolate between the last two ticks for display.
+`DeterministicWorld.ReadPoses()` and interpolate between the last two ticks for display, or
+let `SimPresentationBinder` in the gameplay layer do exactly that for every entity.
 
 Keep presentation strictly downstream. Nothing a renderer, animator or camera does may feed
 back into the simulation — that is how frame rate leaks into physics and peers with
-different hardware drift apart.
+different hardware drift apart. The one place a camera legitimately touches gameplay is
+input: `SimInputEncoder` resolves a peer's movement against its camera locally and networks
+only the quantized result, so the camera orientation never enters the simulation. See
+[Gameplay.md](Gameplay.md).
 
 ---
 
@@ -652,18 +688,32 @@ mass, per-scene stepping, contact reset modes, sleep policy, log callback), the 
 bindings, `SimConfig`, `DeterministicWorld`, `StableIdAllocator`, `SnapshotRing`, `SimMass`,
 `SimLog`, `SimInput` / `InputBuffer`, and `RollbackEngine`.
 
+**State channels and gameplay layer (managed):** the three-channel snapshot
+(`SimStateWriter`/`SimStateReader`, entity and game sections with per-channel hashes,
+`ISimStateProvider`), and the whole `Gameplay/` layer — entities and pooling, actions, game
+modes, the game host, players, camera-relative input and presentation binding — are
+implemented in managed code with EditMode determinism tests for the parts that need no native
+world.
+
 **Known gap:** `PrepareForRebuild` restores into the existing native world instead of
-recreating it, so mid-match join is not yet correct — see the note in §9.
+recreating it, so mid-match join is not yet correct — see the note in §9. For the managed
+channels it captures the provider's current state, so the game layer must apply the agreed
+managed state before calling it.
 
 **Framework sleeping** (§5.6) is the deterministic answer to resting bodies: it is driven
 from snapshotted state so that it replays, and is off by default (`SleepTicks = 0`). The one
 part still on trust is a sleeper woken by a *new* contact under rollback, which
 `TestFrameworkSleepReplays` does not yet exercise.
 
+**Specified, native side pending:** forces (`AddForce`/`AddTorque`), scene queries with
+stable-ID-sorted hits, and the contact/trigger event buffer are specified in
+[NativeGameplayApi.md](NativeGameplayApi.md) with matching `NativeMethods` declarations and
+managed wrappers (`SimBody`, `SimQuery`, `SimContacts`), so gameplay compiles against them;
+the native implementations are the remaining work before that gameplay runs.
+
 **Not yet implemented:** the transport interface and wire messages that carry the
-synchronised rebuild; articulation and vehicle rollback state beyond the generic path;
-scene queries with stable-ID-sorted hits and the contact/trigger event buffer; the multi-peer
-test harness; editor tooling; the sample scene.
+synchronised rebuild; articulation and vehicle rollback state beyond the generic path; the
+multi-peer test harness; editor tooling; the sample scene.
 
 Where this document describes something in that second list — principally the message flow
 in §9 — it describes the intended design, and the mechanism it rests on

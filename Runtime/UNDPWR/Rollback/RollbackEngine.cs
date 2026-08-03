@@ -86,6 +86,7 @@ namespace UNDPWR.Rollback
         private readonly InputBuffer _inputs;
         private readonly SnapshotRing _snapshots;
         private readonly List<ISimStepHandler> _handlers = new List<ISimStepHandler>();
+        private ISimStateProvider _stateProvider;
 
         private int _confirmedTick = -1;
         private int _currentTick = -1;
@@ -160,6 +161,20 @@ namespace UNDPWR.Rollback
         }
 
         /// <summary>
+        /// Registers the managed state channels that are captured and restored with the
+        /// physics blob, or clears them by passing null.
+        /// </summary>
+        /// <remarks>
+        /// Set once at session start, before <see cref="Initialise"/>, so tick zero already
+        /// carries the managed state. A physics-only world leaves it unset; the engine then
+        /// behaves exactly as it did before the gameplay layer existed.
+        /// </remarks>
+        public void SetStateProvider(ISimStateProvider provider)
+        {
+            _stateProvider = provider;
+        }
+
+        /// <summary>
         /// Captures the initial state as tick zero, before any stepping.
         /// </summary>
         /// <remarks>
@@ -177,12 +192,15 @@ namespace UNDPWR.Rollback
             int size = _world.CaptureState(ref buffer, out hash);
             slot.Data = buffer;
             _snapshots.CompleteWrite(slot, size, hash);
+            CaptureManagedInto(slot);
             _snapshots.MarkConfirmedThrough(0);
 
             _confirmedTick = 0;
             _currentTick = 0;
 
-            SimLog.Info(string.Format("Initialised at tick 0; state is {0} bytes, hash 0x{1:X16}", size, hash));
+            SimLog.Info(string.Format(
+                "Initialised at tick 0; physics {0} bytes hash 0x{1:X16}, combined hash 0x{2:X16}",
+                size, hash, slot.CombinedHash));
         }
 
         /// <summary>
@@ -363,6 +381,7 @@ namespace UNDPWR.Rollback
             }
 
             _world.RestoreState(snapshot.Data, snapshot.Size);
+            RestoreManagedFrom(snapshot);
         }
 
         private void StepOnce(int tick, bool isReplay)
@@ -394,7 +413,53 @@ namespace UNDPWR.Rollback
             int size = _world.CaptureState(ref buffer, out hash);
             slot.Data = buffer;
             _snapshots.CompleteWrite(slot, size, hash);
+            CaptureManagedInto(slot);
             slot.IsConfirmed = confirmed;
+        }
+
+        /// <summary>
+        /// Captures the two managed channels into a slot the physics channel has already
+        /// been written to. A no-op that leaves the channels empty when no provider is set.
+        /// </summary>
+        private void CaptureManagedInto(Snapshot slot)
+        {
+            if (_stateProvider == null)
+            {
+                slot.EntitySize = 0;
+                slot.EntityHash = 0;
+                slot.GameSize = 0;
+                slot.GameHash = 0;
+                return;
+            }
+
+            SimStateWriter entityWriter = new SimStateWriter(slot.EntityData);
+            _stateProvider.CaptureEntityState(ref entityWriter);
+            slot.EntityData = entityWriter.Buffer;
+            slot.EntitySize = entityWriter.Position;
+            slot.EntityHash = entityWriter.Hash;
+
+            SimStateWriter gameWriter = new SimStateWriter(slot.GameData);
+            _stateProvider.CaptureGameState(ref gameWriter);
+            slot.GameData = gameWriter.Buffer;
+            slot.GameSize = gameWriter.Position;
+            slot.GameHash = gameWriter.Hash;
+        }
+
+        /// <summary>
+        /// Restores the two managed channels from a slot. A no-op when no provider is set.
+        /// </summary>
+        private void RestoreManagedFrom(Snapshot slot)
+        {
+            if (_stateProvider == null)
+            {
+                return;
+            }
+
+            SimStateReader entityReader = new SimStateReader(slot.EntityData, slot.EntitySize);
+            _stateProvider.RestoreEntityState(ref entityReader);
+
+            SimStateReader gameReader = new SimStateReader(slot.GameData, slot.GameSize);
+            _stateProvider.RestoreGameState(ref gameReader);
         }
 
         /// <summary>
@@ -462,6 +527,10 @@ namespace UNDPWR.Rollback
             int captured = _world.CaptureState(ref buffer, out hash);
             slot.Data = buffer;
             _snapshots.CompleteWrite(slot, captured, hash);
+            // The managed channels are captured from whatever the provider currently holds,
+            // so the game layer must have applied the agreed managed state to its objects
+            // before calling this, exactly as it applies the agreed physics snapshot.
+            CaptureManagedInto(slot);
             slot.IsConfirmed = true;
 
             _confirmedTick = resumeTick;

@@ -3,6 +3,8 @@
 | document | what it covers |
 | --- | --- |
 | [Architecture.md](Architecture.md) | How the framework is built: layers, identity, state and snapshots, the tick lifecycle, input flow, data ownership, join and resync, extension points, failure modes. **Read this first.** |
+| [Gameplay.md](Gameplay.md) | The gameplay layer over the engine: the three state channels, entities and pooling, actions, game modes and the game host, players and camera-relative input, presentation. Where to start once physics rolls back and you want a game on top of it. |
+| [NativeGameplayApi.md](NativeGameplayApi.md) | The forces, scene queries and contact/trigger buffer the gameplay layer needs from the native plugin, with the deterministic sort-order requirements. The contract the managed side already compiles against. |
 | [CrossPlatformDeterminism.md](CrossPlatformDeterminism.md) | Why peers must share a CPU architecture today, what specifically breaks between ARM and x86, what it would take to change, and how to test it cheaply. |
 
 The [package README](../README.md) is the short version: the governing rule, the measurements

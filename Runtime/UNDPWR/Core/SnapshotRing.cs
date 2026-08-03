@@ -4,21 +4,57 @@ using UNDPWR.Diagnostics;
 namespace UNDPWR.Core
 {
     /// <summary>
-    /// One tick's captured world state, plus the hash and tick number it belongs to.
+    /// One tick's captured world state across every channel, plus the hashes and tick
+    /// number it belongs to.
     /// </summary>
+    /// <remarks>
+    /// A snapshot carries three independent channels, captured and restored together:
+    /// <list type="bullet">
+    /// <item><description><b>Physics</b> (<see cref="Data"/>) — the opaque native blob of
+    /// pose, velocity and articulation state, hashed natively during capture into
+    /// <see cref="Hash"/>.</description></item>
+    /// <item><description><b>Entity</b> (<see cref="EntityData"/>) — per-entity managed
+    /// state such as health and timers, written by the gameplay layer through a
+    /// <see cref="SimStateWriter"/> and hashed into <see cref="EntityHash"/>.</description></item>
+    /// <item><description><b>Game</b> (<see cref="GameData"/>) — the game mode's own
+    /// state such as scores and the pending action log, hashed into
+    /// <see cref="GameHash"/>.</description></item>
+    /// </list>
+    /// Keeping the channels and their hashes separate is what lets a desync be attributed
+    /// to physics, to a particular entity, or to the game mode, rather than to "something".
+    /// The two managed channels are empty for a world driven without a gameplay layer.
+    /// </remarks>
     public sealed class Snapshot
     {
         /// <summary>The tick this state was captured at the end of.</summary>
         public int Tick { get; internal set; }
 
-        /// <summary>The captured bytes. Only the first <see cref="Size"/> are meaningful.</summary>
+        /// <summary>The captured physics bytes. Only the first <see cref="Size"/> are meaningful.</summary>
         public byte[] Data { get; internal set; }
 
         /// <summary>How many bytes of <see cref="Data"/> are meaningful.</summary>
         public int Size { get; internal set; }
 
-        /// <summary>The state's hash, computed natively during capture.</summary>
+        /// <summary>The physics state's hash, computed natively during capture.</summary>
         public ulong Hash { get; internal set; }
+
+        /// <summary>The captured entity-channel bytes, or an empty buffer when unused.</summary>
+        public byte[] EntityData { get; internal set; }
+
+        /// <summary>How many bytes of <see cref="EntityData"/> are meaningful.</summary>
+        public int EntitySize { get; internal set; }
+
+        /// <summary>The entity channel's hash, folded from its bytes during capture.</summary>
+        public ulong EntityHash { get; internal set; }
+
+        /// <summary>The captured game-channel bytes, or an empty buffer when unused.</summary>
+        public byte[] GameData { get; internal set; }
+
+        /// <summary>How many bytes of <see cref="GameData"/> are meaningful.</summary>
+        public int GameSize { get; internal set; }
+
+        /// <summary>The game channel's hash, folded from its bytes during capture.</summary>
+        public ulong GameHash { get; internal set; }
 
         /// <summary>
         /// Whether the server has confirmed every input up to <see cref="Tick"/>, making
@@ -26,13 +62,36 @@ namespace UNDPWR.Core
         /// </summary>
         public bool IsConfirmed { get; internal set; }
 
+        /// <summary>
+        /// The three channel hashes folded into one, which is what peers compare to decide
+        /// whether they agree.
+        /// </summary>
+        /// <remarks>
+        /// Folding all three every time, including the empty managed channels, keeps the
+        /// value well-defined for a physics-only world: the two managed hashes are their
+        /// zero-length hash and contribute the same constant on every peer.
+        /// </remarks>
+        public ulong CombinedHash
+        {
+            get
+            {
+                ulong hash = SimHash.OffsetBasis;
+                hash = SimHash.Combine(hash, Hash);
+                hash = SimHash.Combine(hash, EntityHash);
+                hash = SimHash.Combine(hash, GameHash);
+                return hash;
+            }
+        }
+
         internal Snapshot(int capacity)
         {
             Data = new byte[capacity];
+            EntityData = new byte[0];
+            GameData = new byte[0];
             Tick = -1;
         }
 
-        /// <summary>Copies the payload into a fresh array, for sending or archiving.</summary>
+        /// <summary>Copies the physics payload into a fresh array, for sending or archiving.</summary>
         public byte[] ToArray()
         {
             byte[] copy = new byte[Size];
@@ -123,6 +182,10 @@ namespace UNDPWR.Core
             slot.Tick = tick;
             slot.Size = 0;
             slot.Hash = 0;
+            slot.EntitySize = 0;
+            slot.EntityHash = 0;
+            slot.GameSize = 0;
+            slot.GameHash = 0;
             slot.IsConfirmed = false;
             return slot;
         }
@@ -209,6 +272,10 @@ namespace UNDPWR.Core
                 _slots[i].Tick = -1;
                 _slots[i].Size = 0;
                 _slots[i].Hash = 0;
+                _slots[i].EntitySize = 0;
+                _slots[i].EntityHash = 0;
+                _slots[i].GameSize = 0;
+                _slots[i].GameHash = 0;
                 _slots[i].IsConfirmed = false;
             }
             _newestTick = -1;

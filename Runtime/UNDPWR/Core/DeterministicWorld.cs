@@ -71,6 +71,18 @@ namespace UNDPWR.Core
         public bool IsValid { get { return _world != IntPtr.Zero; } }
 
         /// <summary>
+        /// The native world handle, for the query and contact wrappers in this assembly.
+        /// </summary>
+        /// <remarks>
+        /// Internal on purpose. Gameplay reaches scene queries and contact events through
+        /// <see cref="UNDPWR.Gameplay.SimQuery"/> and
+        /// <see cref="UNDPWR.Gameplay.SimContacts"/>, which keep the deterministic
+        /// stable-ID resolution and sort order that calling the native layer by hand would
+        /// bypass.
+        /// </remarks>
+        internal IntPtr Handle { get { return _world; } }
+
+        /// <summary>
         /// The native <c>PxScene</c>, for the parts of the existing PhysX 5 package that
         /// take one. Do not add or remove actors through it; that bypasses the stable-ID
         /// ordering.

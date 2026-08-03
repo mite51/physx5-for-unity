@@ -57,6 +57,73 @@ namespace UNDPWR.Interop
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void PxwApplyDeterministicRigidDefaults(IntPtr actor, uint positionIters, uint velocityIters);
 
+        // ---------------------------------------------------- body gameplay I/O ----
+        //
+        // These are the reads and writes gameplay needs on a single body inside a step
+        // handler. They are declared here so the managed gameplay layer compiles and can
+        // be developed in parallel with the native side; see Documentation/NativeGameplayApi.md
+        // for the contract each must satisfy.
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyAddForce(IntPtr actor, ref Vector3 force, uint mode);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyAddTorque(IntPtr actor, ref Vector3 torque, uint mode);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyGetPose(IntPtr actor, out SimTransform pose);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyTeleport(IntPtr actor, ref SimTransform pose, ref Vector3 velocity, ref Vector3 angularVelocity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyGetLinearVelocity(IntPtr actor, out Vector3 velocity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodySetLinearVelocity(IntPtr actor, ref Vector3 velocity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodyGetAngularVelocity(IntPtr actor, out Vector3 velocity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void PxwBodySetAngularVelocity(IntPtr actor, ref Vector3 velocity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern float PxwBodyGetMass(IntPtr actor);
+
+        // -------------------------------------------------------- scene queries ----
+        //
+        // World-level queries that resolve every hit to a stable ID and return the hits in
+        // a deterministic order (raycast/sweep by distance then ID, overlap by ID).
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldRaycast(
+            IntPtr world, ref Vector3 origin, ref Vector3 direction, float maxDistance,
+            uint filterMask, SimRaycastHit* hits, uint capacity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldOverlap(
+            IntPtr world, uint shape, ref Vector3 center, ref Vector3 halfExtents, float radius,
+            ref Quaternion rotation, uint filterMask, SimOverlapHit* hits, uint capacity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldSweep(
+            IntPtr world, uint shape, ref Vector3 origin, ref Vector3 halfExtents, float radius,
+            ref Quaternion rotation, ref Vector3 direction, float maxDistance,
+            uint filterMask, SimRaycastHit* hits, uint capacity);
+
+        // ------------------------------------------------- contacts and triggers ----
+        //
+        // Drained once after a step. Both buffers arrive with their pairs normalised to
+        // ascending stable-ID order and sorted, so gameplay sees the same events in the
+        // same order on every peer.
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldDrainContacts(IntPtr world, SimContactEvent* dst, uint capacity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldDrainTriggers(IntPtr world, SimTriggerEvent* dst, uint capacity);
+
         // ---------------------------------------------------------------- mass ----
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]

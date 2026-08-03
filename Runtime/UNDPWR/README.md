@@ -105,9 +105,11 @@ rest counter that drives that is in the snapshot, so it replays. Sleeping is off
 | folder | contents |
 | --- | --- |
 | `Interop/` | P/Invoke bindings and blittable structs mirroring `PxwUndpwr.h`. Internal — calling it directly bypasses stable-ID ordering. |
-| `Core/` | `SimConfig`, `DeterministicWorld`, `SimEntity`, `StableIdAllocator`, `SnapshotRing`, `SimMass`. |
-| `Rollback/` | `SimInput`, `InputBuffer`, `RollbackEngine`, `ISimStepHandler`. |
+| `Core/` | `SimConfig`, `DeterministicWorld`, `SimEntity`, `StableIdAllocator`, `SnapshotRing`, `SimMass`, `SimStateWriter`/`SimStateReader`. |
+| `Rollback/` | `SimInput`, `InputBuffer`, `RollbackEngine`, `ISimStepHandler`, `ISimStateProvider`. |
+| `Gameplay/` | The gameplay layer over the engine: entities and pooling, actions, game modes and the game host, players and camera-relative input, presentation binding. See [Documentation/Gameplay.md](Documentation/Gameplay.md). |
 | `Diagnostics/` | `SimLog`, including the native diagnostic sink. |
+| `Tests/` | EditMode determinism tests for the managed layers. |
 | `Documentation/` | Long-form guides — see [the index](Documentation/README.md). |
 
 [`Documentation/Architecture.md`](Documentation/Architecture.md) is the detailed treatment:
@@ -143,6 +145,20 @@ engine.Advance();
 Everything that touches the simulation must go through `ISimStepHandler`. A force applied
 outside it happens on the original pass and not on the replay, which desyncs a peer
 against itself.
+
+## Gameplay layer
+
+`ISimStepHandler` is the floor, not the ceiling. The `Gameplay/` folder builds the rest of a
+game on it: entities whose managed state rolls back, a pool that spawns by enabling a dormant
+instance, an action queue, a game mode that owns its own rollback state, players with
+camera-relative input, and presentation interpolation. `SimGameHost` ties it together as the
+single step handler and state provider, so the per-tick order is fixed in one place.
+
+The rollback model reaches gameplay through three state channels — physics, entity and game —
+each captured, restored and hashed together, so health, scores and the action log survive a
+rewind the same way poses do. [Documentation/Gameplay.md](Documentation/Gameplay.md) is the
+walkthrough; [Documentation/NativeGameplayApi.md](Documentation/NativeGameplayApi.md) specifies
+the forces, scene queries and contact events the layer needs from the native plugin.
 
 ## GPU backend
 
