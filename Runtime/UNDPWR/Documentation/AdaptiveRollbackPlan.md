@@ -133,9 +133,17 @@ chain-depth limit is what stands between the two.
    workloads. Exit criterion: two peers rewinding by different, varying amounts stay
    bit-identical for 600 frames.
 2. *Is the chain-depth-8 rule survivable as a content constraint?* This one cannot be fixed in
-   code and does not have a known mechanism (§9). It needs a runtime diagnostic that reports
-   the deepest contact chain per tick, so the rule is enforced rather than remembered. Decide
-   against measured scenes, not against intuition.
+   code and does not have a known mechanism (§9). It now has a diagnostic. `PxwRollbackRepro`
+   installs a notification-only filter shader and a `PxSimulationEventCallback` on an opt-in
+   scene, rebuilds the contact graph from the reported touches, and reports the deepest chain
+   of resting contacts rooted at the ground (section 3u). Measured against settled columns the
+   walk returns the exact column height — 2, 4, 8, 9, 12 all read back true — and a flat grid
+   reads 1, so the depth-8 boundary the divergence table shows (eight survives, nine diverges)
+   is now a measured property of the graph rather than a remembered column height. The shader
+   only ORs in notification flags and changes no collision or solve decision, which is the
+   same property the shipping contact-event work (stage 3a) rests on, so the same walk can be
+   promoted into the runtime to enforce the limit on real content. Decide against measured
+   scenes, not against intuition.
 3. *Is PGS quality acceptable where TGS was chosen for it?* Stacks are measured and favour
    PGS-cold (§2). Articulations are now measured too, and the result is unexpectedly strong.
    Vehicles and high mass ratios remain open.

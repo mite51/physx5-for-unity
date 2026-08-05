@@ -264,13 +264,16 @@ binder.Render(alpha);
 
 ## What the native side still owes
 
-Forces, scene queries and contact events cross into the native plugin, and those entry points
-are specified but not yet implemented — see [NativeGameplayApi.md](NativeGameplayApi.md). The
-managed layer compiles and its allocation-free, deterministic structure is testable today; the
-calls that reach PhysX (`SimBody`, `SimQuery`, `SimContacts`) resolve once the plugin catches
-up. The determinism-critical requirement on that side is ordering: query hits and contact
-events must be returned in a reproducible order, because an unsorted set is a desync that looks
-like a gameplay bug.
+Forces and scene queries are implemented: `SimBody` and `SimQuery` reach PhysX through the
+native plugin and run today. Contact and trigger events (`SimContacts`) are the exception —
+the managed drain runs every step but the native side returns nothing, because collecting
+events deterministically needs a `PxSimulationEventCallback` and a custom filter shader, and
+changing the filter shader risks the determinism the rest of the layer is measured against.
+See [NativeGameplayApi.md](NativeGameplayApi.md). Until that lands, gameplay that needs to know
+about an overlap uses an explicit `SimQuery.Overlap` in a step handler, which is evaluated at a
+known point in the tick rather than reported after it. The determinism-critical requirement on
+the event side is ordering: contact events must be returned in a reproducible order, because an
+unsorted set is a desync that looks like a gameplay bug.
 
 ## Verification
 

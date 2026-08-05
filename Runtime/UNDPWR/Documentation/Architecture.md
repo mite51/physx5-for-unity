@@ -229,6 +229,14 @@ The physics channel is an opaque byte blob produced by the native layer. Per ent
   sleeping flag, disabled flag.
 - **Articulation** — root pose, root velocities, joint positions / velocities / forces for
   every DOF, rest counter, sleep and disabled flags.
+- **Vehicle** — today, only the chassis rigid body, captured exactly as a rigid dynamic. The
+  drivetrain and suspension integrator state (wheel rotation and speed, suspension jounce,
+  engine RPM, gear and shift progress, clutch slip, sticky-tire timers) is **not** yet in the
+  snapshot, so a vehicle is not rollback-safe: after a restore its wheels and engine carry
+  stale state. Capturing that integrator state is planned
+  (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) stage 3b). Per-step derived outputs
+  (tire forces, slip, road-geometry queries) will stay out, and the driver's commands ride the
+  input channel, not the snapshot.
 - **Rigid static** — nothing. Statics are registered so queries and contact reports can
   resolve them to a stable ID, but they cannot move, so there is nothing to capture.
 
@@ -741,15 +749,21 @@ from snapshotted state so that it replays, and is off by default (`SleepTicks = 
 part still on trust is a sleeper woken by a *new* contact under rollback, which
 `TestFrameworkSleepReplays` does not yet exercise.
 
-**Specified, native side pending:** forces (`AddForce`/`AddTorque`), scene queries with
-stable-ID-sorted hits, and the contact/trigger event buffer are specified in
-[NativeGameplayApi.md](NativeGameplayApi.md) with matching `NativeMethods` declarations and
-managed wrappers (`SimBody`, `SimQuery`, `SimContacts`), so gameplay compiles against them;
-the native implementations are the remaining work before that gameplay runs.
+**Implemented:** forces (`AddForce`/`AddTorque`) and scene queries with stable-ID-sorted
+hits, both specified in [NativeGameplayApi.md](NativeGameplayApi.md) and backed by the native
+plugin, so `SimBody` and `SimQuery` reach PhysX and gameplay that uses them runs.
+
+**Specified, native side pending:** the contact/trigger event buffer (`SimContacts`). The
+managed drain runs every step and the native `PxwWorldDrainContacts`/`DrainTriggers` are
+present but return nothing, because a deterministic implementation needs a
+`PxSimulationEventCallback` and a custom filter shader, and changing the filter shader risks
+the determinism the rest of the layer is measured against. Until then, gameplay that needs to
+know about an overlap uses an explicit `SimQuery.Overlap` in a step handler.
 
 **Not yet implemented:** the transport interface and wire messages that carry the
-synchronised rebuild; articulation and vehicle rollback state beyond the generic path; the
-multi-peer test harness; editor tooling; the sample scene.
+synchronised rebuild; vehicle rollback state beyond the chassis rigid body; the multi-peer
+test harness; editor tooling; the sample scene. Articulation rollback now works and is
+measured (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
 
 Where this document describes something in that second list — principally the message flow
 in §9 — it describes the intended design, and the mechanism it rests on

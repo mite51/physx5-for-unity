@@ -180,12 +180,17 @@ namespace UNDPWR.Core
             NativeResult result = (NativeResult)NativeMethods.PxwWorldRegister(_world, stableId, nativeHandle, (uint)kind);
             result.ThrowIfFailed(string.Format("PxwWorldRegister(id {0})", stableId));
 
-            // The configured iteration counts have to be pushed onto the body; PhysX does
-            // not read them from anywhere. Only a non-kinematic dynamic has a solver to
-            // configure. Every peer applies the same counts, which is why they are hashed.
+            // The deterministic defaults have to be pushed onto the body; PhysX does not
+            // read them from anywhere. Only a non-kinematic dynamic has a solver to
+            // configure. This applies the hashed iteration counts and, just as importantly,
+            // the two settings the native determinism suite depends on but PhysX does not
+            // default to: speculative CCD off (its contact generation keys off velocity
+            // history, so a restored state would behave differently from the one it was
+            // captured from) and a bounded max depenetration velocity. Every peer applies
+            // the same values, which is why the counts are hashed.
             if (kind == SimHandleKind.RigidDynamic)
             {
-                NativeMethods.PxwSetRigidDynamicSolverIterations(
+                NativeMethods.PxwApplyDeterministicRigidDefaults(
                     nativeHandle, _config.SolverPositionIterations, _config.SolverVelocityIterations);
             }
 
