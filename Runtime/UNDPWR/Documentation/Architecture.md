@@ -229,14 +229,19 @@ The physics channel is an opaque byte blob produced by the native layer. Per ent
   sleeping flag, disabled flag.
 - **Articulation** — root pose, root velocities, joint positions / velocities / forces for
   every DOF, rest counter, sleep and disabled flags.
-- **Vehicle** — today, only the chassis rigid body, captured exactly as a rigid dynamic. The
-  drivetrain and suspension integrator state (wheel rotation and speed, suspension jounce,
-  engine RPM, gear and shift progress, clutch slip, sticky-tire timers) is **not** yet in the
-  snapshot, so a vehicle is not rollback-safe: after a restore its wheels and engine carry
-  stale state. Capturing that integrator state is planned
-  (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) stage 3b). Per-step derived outputs
-  (tire forces, slip, road-geometry queries) will stay out, and the driver's commands ride the
-  input channel, not the snapshot.
+- **Vehicle** — the chassis rigid body, captured exactly as a rigid dynamic, plus the
+  drivetrain and suspension integrator state: per wheel the rotation angle and speed, the
+  suspension jounce / jounce speed / separation, and the sticky-tire low-speed timer; for an
+  engine-drive vehicle also the engine speed, gearbox state (current / target gear and the
+  in-progress shift timer), autobox timer and clutch slip. Per-step derived outputs — tire
+  forces, slip, camber, road-geometry queries, wheel local poses, actuation flags, differential
+  and constraint state — are deliberately excluded, because they are recomputed each step from
+  the captured state plus the road query; capturing them would be waste, and they cannot desync.
+  The driver's commands (throttle, brake, steer, gear) ride the input channel, not the snapshot.
+  Native tests (`RunVehicleTests`) show a vehicle replays a fixed rewind depth bit-exactly and
+  survives peers rewinding by different depths, under both solvers, for direct and engine drive.
+  The wheel count and drive mode are cached on the registry entry at register time and fix the
+  payload size, the way an articulation's DOF count does; a mismatch at restore is refused.
 - **Rigid static** — nothing. Statics are registered so queries and contact reports can
   resolve them to a stable ID, but they cannot move, so there is nothing to capture.
 

@@ -146,7 +146,7 @@ chain-depth limit is what stands between the two.
    scenes, not against intuition.
 3. *Is PGS quality acceptable where TGS was chosen for it?* Stacks are measured and favour
    PGS-cold (§2). Articulations are now measured too, and the result is unexpectedly strong.
-   Vehicles and high mass ratios remain open.
+   Vehicles are now measured as well (below); high mass ratios are covered by §2's stacks.
 
    **Articulations survive variable-depth rollback under both solvers.** `PxwUndpwrTests`
    builds a five-link fixed-base revolute chain and runs the same battery the box scenes get.
@@ -187,9 +187,26 @@ chain-depth limit is what stands between the two.
    these scenes are quiet and shallow: the same TGS diverges under variable depth on a box grid
    at impact, on the deep stacks, and on every `TestColdStepsGiveTransparency` case. TGS is
    transparent on settled shallow contact, not in general, so it cannot be relied on for
-   adaptive rollback. Vehicles are still unmeasurable until their integrator state is in the
-   snapshot (stage 3b) — the only representative shape left open, and one no solver decision can
-   close on its own.
+   adaptive rollback.
+
+   **Vehicles survive variable-depth rollback under both solvers.** With the drivetrain
+   integrator state now in the snapshot (stage 3b), `PxwUndpwrTests` builds a four-wheeled
+   vehicle on the ground and runs the articulation battery over it, for direct and engine drive:
+
+   | scene | solver | baseline | fixed depth 4 | variable depth, 400 frames |
+   | --- | --- | --- | --- | --- |
+   | direct drive, driving | TGS / PGS | ok | exact | **identical** |
+   | direct drive, at rest (sticky tires) | TGS / PGS | ok | exact | — |
+   | engine drive, driving | TGS / PGS | ok | exact | **identical** |
+
+   The vehicle is the case where TGS holding is *not* a surprise: its wheels ride the ground on
+   suspension raycasts, not rigid contacts, so the chassis has no persistent manifold and no
+   uncaptured warm-start — the same reason articulations are transparent. Everything the solver
+   would otherwise carry between steps is either captured (wheel, suspension, sticky, engine,
+   gearbox, autobox, clutch) or recomputed each step from the captured state and a fresh road
+   query. The at-rest case is the sticky-tire regression: the low-speed timer only accumulates
+   once the vehicle has stopped, so a snapshot that dropped it would diverge exactly there, and
+   it does not.
 
 **The decision: PGS.** Every workload the framework can measure — box grids, stacks up to eight
 deep, the capsule, the mass ratio, and articulations on both a free and a grounded chain — is
