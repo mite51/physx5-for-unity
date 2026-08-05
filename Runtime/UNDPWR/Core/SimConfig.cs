@@ -166,24 +166,29 @@ namespace UNDPWR.Core
         /// Which constraint solver runs. Hashed, since a session cannot mix the two.
         /// </summary>
         /// <remarks>
-        /// TGS is the default and was chosen for stack and articulation stability. It is
-        /// also the reason <see cref="PredictionHorizon"/> has to be fixed: TGS carries
-        /// per-substep state that a restore does not reach, so replay is never bitwise
-        /// transparent and peers must all rewind by the same amount.
+        /// PGS is the default. The Phase 1 measurement (Documentation/AdaptiveRollbackPlan.md
+        /// §4) is complete and chose it: PGS is bitwise transparent under the cold-step
+        /// discipline across every workload the framework is measured on — box grids, stacks
+        /// up to eight deep, a settled character capsule, a 40x mass ratio, and articulations
+        /// on both a free-swinging and a grounded chain — so two peers can roll back by
+        /// different depths and still agree. TGS is not: it carries per-substep state a
+        /// restore does not reach, and it diverges under variable depth on a grid at impact,
+        /// on deep stacks and on every cold-step transparency test, holding only on quiet,
+        /// shallow scenes. Adaptive rollback (Phases 2 and 3) requires transparency to
+        /// variable depth, so it requires PGS.
         /// <para>
-        /// PGS is transparent under the cold-step discipline, which is what an adaptive
-        /// horizon would need. The stack-stability argument for TGS is also weaker than it
-        /// looks once every step is cold: on the 16-high stack the native suite measures
-        /// PGS-cold settling to a residual 0.000146 m/s against TGS-cold's 0.003556 m/s.
-        /// What is not yet measured is articulations, vehicles and high mass ratios, and a
-        /// contact chain deeper than 8 bodies defeats variable rollback depth on either
-        /// solver. Documentation/AdaptiveRollbackPlan.md stages that decision; until it is
-        /// made, this field exists so the experiment can be run, not so the default can be
-        /// changed casually.
+        /// The cost is small and bounded. On a 16-high stack PGS-cold actually settles
+        /// quieter than TGS-cold (residual 0.000146 m/s against 0.003556 m/s) though it sags
+        /// about 68 µm more; the one real limit is that a contact chain deeper than eight
+        /// bodies defeats variable rollback depth on <em>either</em> solver, which is a
+        /// content constraint the native chain-depth diagnostic measures rather than a solver
+        /// choice. Set this to TGS only for a strictly fixed-horizon session that wants TGS's
+        /// marginally tighter stacks and will never rewind by varying depths; it is hashed,
+        /// so every peer must agree.
         /// </para>
         /// </remarks>
-        [Tooltip("Constraint solver. Must match on every peer. See AdaptiveRollbackPlan.md before changing.")]
-        public SimSolverType Solver = SimSolverType.TemporalGaussSeidel;
+        [Tooltip("Constraint solver. Must match on every peer. PGS is required for adaptive rollback. See AdaptiveRollbackPlan.md.")]
+        public SimSolverType Solver = SimSolverType.ProjectedGaussSeidel;
 
         /// <summary>Solver position iterations applied to every dynamic body.</summary>
         public uint SolverPositionIterations = 8;

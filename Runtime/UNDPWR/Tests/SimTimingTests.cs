@@ -72,9 +72,10 @@ namespace UNDPWR.Tests
             // refused at join rather than discovered as a desync.
             SimConfig a = SimConfig.Deterministic;
             SimConfig b = SimConfig.Deterministic;
-            b.Solver = SimSolverType.ProjectedGaussSeidel;
+            b.Solver = SimSolverType.TemporalGaussSeidel;
 
-            Assert.AreEqual(SimSolverType.TemporalGaussSeidel, a.Solver, "TGS is still the default");
+            Assert.AreEqual(SimSolverType.ProjectedGaussSeidel, a.Solver,
+                "PGS is the default after the Phase 1 solver decision");
             Assert.AreNotEqual(a.ComputeHash(), b.ComputeHash());
         }
 

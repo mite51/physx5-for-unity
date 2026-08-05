@@ -261,8 +261,13 @@ This is not an oversight to fix later; it is the property the whole design is bu
 - Two worlds restored from the *same* snapshot **are** identical with each other. The
   framework relies on this everywhere.
 - Whether a restored world matches the world the snapshot came from depends on the solver:
-  under PGS it does, provided every step is cold; under TGS it does not. The framework
-  relies on this nowhere, which is why TGS remains a supportable choice.
+  under PGS it does, provided every step is cold; under TGS it does not. The fixed-horizon
+  design relies on this nowhere, so both solvers are supportable there. The Phase 1
+  measurement (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4) chose PGS as the
+  default because the adaptive horizon in Phases 2 and 3 does rely on it: peers that rewind by
+  different depths only agree if replay is transparent, which is a PGS property. TGS stays
+  available, hashed, for a strictly fixed-horizon session that wants its marginally tighter
+  stacks.
 
 ### 5.3 Do not clear the contact caches
 

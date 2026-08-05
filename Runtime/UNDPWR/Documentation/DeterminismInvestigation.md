@@ -126,9 +126,17 @@ PGS-warm against PGS-cold, which is not the comparison the framework faces: it a
 cold, so the question is cold against cold. `MeasureColdStepCost` already prints both, and
 on the 16-high stack the cold rows are 0.000146 m/s residual under PGS against 0.003556 m/s
 under TGS — PGS about 24x quieter — with settled height 1.499999 against 1.499998. TGS was
-selected for stack stability, and once every step is cold it does not have it. Same caveat
-as above: box stacks only, nothing here covers articulations, vehicles or high mass ratios,
-which is the measurement §8 still wants.
+selected for stack stability, and once every step is cold it does not have it.
+
+**The solver decision is made: PGS.** The remaining coverage from the caveat above is now in.
+Articulations survive variable depth under both solvers (`PxwUndpwrTests`), a settled capsule
+and a 40x mass ratio hold under PGS (`PxwRollbackRepro` §3v), and the contact-chain-depth
+diagnostic (§3u) confirms the eight-deep survivability boundary is a measured graph property.
+Only vehicles remain unmeasurable until their integrator state is captured. PGS is transparent
+to variable depth across every measurable workload and TGS is not, so `SimConfig.Solver`
+defaults to PGS; see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4 for the full record.
+The single standing limit is the content constraint — no chain deeper than eight bodies — which
+holds on either solver.
 
 ---
 

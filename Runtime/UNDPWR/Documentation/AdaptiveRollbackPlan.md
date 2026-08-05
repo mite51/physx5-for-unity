@@ -172,14 +172,40 @@ chain-depth limit is what stands between the two.
    This is one chain at one depth. Five links is well under the eight-body contact-chain limit,
    and the ground contacts here are shallow. A longer chain, or a chain in a pile deep enough to
    build a contact chain past eight, has not been measured and is exactly where the limit from
-   item 2 would reappear. Vehicles and high mass ratios are still not measured at all; vehicles
-   in particular cannot be until their integrator state is actually in the snapshot, which today
-   it is not (only the chassis rigid body is captured).
+   item 2 would reappear.
 
-**If any answer is no**, stop. Keep the fixed horizon and keep this document as the record of
-why. The only remaining lever is resetting TGS substep state, which §9 says requires an
-instrumented PhysX build rather than reasoning from the public API — a much larger project
-than this one, and not obviously possible.
+   **Representative rigid workloads hold under PGS.** `PxwRollbackRepro` section 3v adds the two
+   shapes a character game leans on, each under both solvers over 600 frames of differing
+   rollback depth:
+
+   | scene | PGS | TGS |
+   | --- | --- | --- |
+   | upright capsule settling on terrain | **identical** | identical |
+   | 40x mass ratio, two-high | **identical** | identical |
+
+   Both hold under PGS, which is the result that matters. TGS also holds here, but only because
+   these scenes are quiet and shallow: the same TGS diverges under variable depth on a box grid
+   at impact, on the deep stacks, and on every `TestColdStepsGiveTransparency` case. TGS is
+   transparent on settled shallow contact, not in general, so it cannot be relied on for
+   adaptive rollback. Vehicles are still unmeasurable until their integrator state is in the
+   snapshot (stage 3b) — the only representative shape left open, and one no solver decision can
+   close on its own.
+
+**The decision: PGS.** Every workload the framework can measure — box grids, stacks up to eight
+deep, the capsule, the mass ratio, and articulations on both a free and a grounded chain — is
+bitwise transparent under PGS with the cold-step discipline, so two peers rolling back by
+different depths agree. TGS is not, so the adaptive horizon in phases 2 and 3 requires PGS.
+`SimConfig.Solver` now defaults to `ProjectedGaussSeidel`; the field stays, hashed, so a
+strictly fixed-horizon session can still opt into TGS for its marginally tighter stacks. The
+one standing limit is a content constraint, not a solver one: a contact chain deeper than eight
+bodies defeats variable depth on either solver, and the section 3u diagnostic is how that is
+kept enforced rather than remembered. This unblocks phases 2 and 3 below.
+
+The only case a **no** would still apply to is a game whose core loop needs deep stacks
+(nine-plus) resolved under varying rollback depth. That is out of reach for either solver
+without resetting TGS substep state, which §9 says needs an instrumented PhysX build rather than
+the public API — a much larger project than this one, and not obviously possible. Such a game
+keeps the fixed horizon and this document as the record of why.
 
 ---
 

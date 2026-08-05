@@ -294,7 +294,7 @@ namespace UNDPWR.Interop
         /// <summary>Scene query pruning structure, a <c>PxPruningStructureType</c>.</summary>
         public int PruningStructureType;
 
-        /// <summary>Solver type, a <c>PxSolverType</c>. TGS is the UNDPWR default.</summary>
+        /// <summary>Solver type, a <c>PxSolverType</c>. PGS is the UNDPWR default.</summary>
         public int SolverType;
 
         /// <summary>Broadphase type, a <c>PxBroadPhaseType</c>, or -1 for the PhysX default.</summary>
