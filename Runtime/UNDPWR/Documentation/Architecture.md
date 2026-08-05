@@ -828,7 +828,8 @@ property the pose replay has. Gameplay may branch its hashed state on *which* bo
 **Not yet implemented:** the synchronised-rebuild message flow that carries a mid-match join
 over the transport (the `ISimTransport` seam, wire messages, config-hash handshake and
 confirmed-tick hash exchange now exist — see §9.1 — but `PrepareForRebuild` still restores
-into the existing world rather than recreating it, per the known gap in §9); a multi-peer
-test harness that drives two native worlds; editor tooling; the sample scene. Articulation
-and vehicle rollback now work and are measured (see
+into the existing world rather than recreating it, per the known gap in §9); editor tooling;
+the sample scene. Articulation and vehicle rollback now work and are measured, and a native
+multi-peer harness (`RunMultiPeerTests` in `PxwUndpwrTests`) drives two worlds over a lossy,
+latent channel and confirms their per-tick hashes agree under both solvers (see
 [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
