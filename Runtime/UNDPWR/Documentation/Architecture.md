@@ -419,7 +419,9 @@ differs per peer. Replaying the full window every frame costs a little throughpu
 the identical-sequence property.
 
 It also removes the frame-time spike that conditional rollback produces on the frames it
-fires. Cost becomes steady and predictable instead of bursty.
+fires. Cost becomes steady and predictable instead of bursty. This is the default; a PGS
+session that would rather minimise redundant work can opt into conditional rollback and accept
+the spike (§6.5).
 
 ### 6.3 Why the confirmed timeline advances at most one tick per frame
 
@@ -467,6 +469,55 @@ and recoverable.
 The budget being exhausted is `PredictionHorizon + LocalInputDelay - 1` ticks of **one-way**
 delivery, not a round trip — 116 ms at the defaults. §7.4 works the timing through and
 explains which of the two knobs to widen.
+
+### 6.5 Conditional rollback (opt-in, Phase 2)
+
+Everything above describes the default. Setting `SimConfig.ConditionalRollback` swaps two of
+those behaviours for the Phase 2 design, and nothing else:
+
+- **Step 3 becomes `RunPredictionConditional()`.** Instead of replaying the whole window, it
+  replays from the earliest tick a misprediction dirtied — `RollbackEngine.SubmitInput` folds
+  `InputBuffer.Submit`'s return into `_pendingReplayFrom` — up to the horizon end, and reuses
+  every valid snapshot below that. A frame with no misprediction and no new confirmation
+  replays nothing. The cold-step discipline is unchanged: one restore to `replayFrom - 1`, then
+  one restore before each subsequent step.
+- **Step 2 drops the one-tick cap** and drains the whole confirmed backlog (§6.3's cap is a
+  TGS concern; PGS makes a confirmed step a pure function of the confirmed snapshot before it,
+  so draining a burst in one frame gives the same hashes as draining it across frames).
+
+This is refused unless `Solver` is PGS, because both changes rely on transparent replay
+(§2.2), which the Phase 1 measurement found for PGS alone. It is peer-local and unhashed: the
+confirmed timeline — the only thing peers compare — is advanced by the same cold restore-and-step
+per tick either way, so a conditional peer and a fixed-horizon peer still agree tick for tick.
+A bug in the replay-start bookkeeping could smear this peer's *predicted* snapshots, which are
+never exchanged; it cannot desync the session.
+
+The safety net changes with it. The fixed horizon guaranteed identical per-frame sequences;
+conditional rollback gives that up, so confirmed-hash desync detection stops being a diagnostic
+and becomes mandatory. `SimSession` forces `SimDesyncDetector.Fatal = true` whenever the flag is
+set (§9).
+
+### 6.6 Free-running clock (opt-in, Phase 3)
+
+`SimConfig.FreeRunningClock` goes one step further, and requires conditional rollback (so also
+PGS). It replaces step 1's gate and the `CurrentTick == ConfirmedTick + PredictionHorizon`
+invariant:
+
+- `Advance` dispatches to `AdvanceFreeRunning`, which moves `_currentTick` forward **once per
+  fixed update**, independently of confirmation. The lead over the confirmed tick is whatever
+  the network allows, and the only stall is the physical one — running further ahead than the
+  snapshot ring can retain (`SnapshotHistory - LocalInputDelay - 1`). The prediction window is
+  `(_confirmedTick, _currentTick]`, variable-width, replayed by the same
+  `RunPredictionConditional` (§6.5) with `_currentTick` as its end.
+- `PredictionHorizon` stops being a shared operation-sequence length and becomes a peer-local
+  target lead (`RollbackEngine.CurrentLead` reads the live value). It therefore **leaves the
+  config hash** while this flag is set; `FreeRunningClock` itself is hashed so both peers agree
+  on that rule. A peer may retune its lead from observed latency mid-session — the Overwatch-style
+  adaptation — without any agreement, exactly as `LocalInputDelay` already allows.
+
+Under the fixed horizon the whole session runs in lockstep with its slowest link; a free-running
+clock lets each peer keep its own time and only agree on confirmed state, which under PGS is
+independent of how far ahead each predicted. Desync detection is mandatory here too (§9).
 
 ---
 
@@ -580,14 +631,15 @@ Afterwards every peer is on an identical history again, which the measurements s
 worlds rebuilt this way stayed bit-identical for 32 ticks even with their actors registered
 in opposite orders.
 
-> **Known gap.** `RollbackEngine.PrepareForRebuild` currently restores into each peer's
-> *existing* native world rather than recreating it. That is not what the passing test does:
-> `TestRebuiltWorldsAgree` builds two brand-new worlds. The distinction matters because a
-> joining peer's world is necessarily fresh while every existing peer's is warmed, and §2.3
-> establishes that a world which has never simulated cannot match one that has. The rebuild
-> must therefore destroy and recreate the native world on *every* peer — re-registering the
-> same actor pointers in stable-ID order — not merely restore into it. Until that lands,
-> mid-match join is not correct.
+> **Resolved.** `RollbackEngine.PrepareForRebuild` now recreates the native world by default
+> (`recreateWorld: true`). It calls `DeterministicWorld.RecreateNativeWorld`, which destroys the
+> scene, re-registers the same actor pointers in stable-ID order into a fresh one, re-applies
+> the deterministic body defaults and enabled state, and then restores the agreed snapshot. This
+> is what `TestRebuiltWorldsAgree` measures — two brand-new worlds agreeing — rather than a
+> restore into a warmed world, so a joining peer (whose world is necessarily fresh) reaches the
+> same PhysX internal arrangement as every existing peer. Releasing the scene leaves the actors
+> alive, since they are owned by the Unity PhysX layer rather than the scene, which is what makes
+> re-adding them possible.
 
 The cost is a brief hitch for everyone rather than only the joiner. Joins are rare, and the
 alternative is a joiner that is permanently slightly wrong.
@@ -618,8 +670,9 @@ the wire (`SimMessageKind`):
   discovered mid-match.
 - **Hash** — a confirmed tick and its `Snapshot.CombinedHash`. `SimDesyncDetector` compares
   each peer's hash against its own for the same confirmed tick and raises the first
-  disagreement. It is diagnostic while the fixed horizon is the safety net, and becomes
-  mandatory (`SimDesyncDetector.Fatal`) once conditional rollback removes that net in Phase 2.
+  disagreement. It is diagnostic while the fixed horizon is the safety net; `SimSession` forces
+  it mandatory (`SimDesyncDetector.Fatal = true`) whenever `SimConfig.ConditionalRollback`
+  removes that net (§6.5).
 
 The per-frame loop stays in the caller's hands: `session.Pump()` drains the network into the
 engine, `session.SubmitLocalInput` submits and broadcasts, `engine.Advance()` steps once, and
@@ -800,15 +853,21 @@ modes, the game host, players, camera-relative input and presentation binding �
 implemented in managed code with EditMode determinism tests for the parts that need no native
 world.
 
-**Known gap:** `PrepareForRebuild` restores into the existing native world instead of
-recreating it, so mid-match join is not yet correct — see the note in §9. For the managed
-channels it captures the provider's current state, so the game layer must apply the agreed
-managed state before calling it.
+`PrepareForRebuild` now recreates the native world by default before restoring (§9), so a
+mid-match joiner reaches the same PhysX internal arrangement as the existing peers. For the
+managed channels it captures the provider's current state, so the game layer must apply the
+agreed managed state before calling it.
 
 **Framework sleeping** (§5.6) is the deterministic answer to resting bodies: it is driven
-from snapshotted state so that it replays, and is off by default (`SleepTicks = 0`). The one
-part still on trust is a sleeper woken by a *new* contact under rollback, which
-`TestFrameworkSleepReplays` does not yet exercise.
+from snapshotted state so that it replays, and is off by default (`SleepTicks = 0`). A sleeper
+woken by a *new* contact under rollback is now exercised directly by
+`TestSleeperWokenUnderRollback`, and the result is a characterisation rather than a clean pass:
+the settling *before* the wake replays bit-exactly, but the wake transition itself does not,
+even under PGS. Waking a sleeper builds a fresh contact whose solver warm-start the snapshot
+deliberately does not carry — the same uncaptured state that makes a contact's point and impulse
+only approximate across a cold restore — so the first divergence lines up with the wake tick.
+Gameplay must treat a rollback-spanning wake the way it treats a contact impulse: branch on the
+fact that a body woke, never on the exact tick or the resulting velocity.
 
 **Implemented:** forces (`AddForce`/`AddTorque`), scene queries with stable-ID-sorted hits,
 and the contact/trigger event buffer (`SimContacts`), all specified in
@@ -825,11 +884,13 @@ are only approximate across a cold restore — the same "as close as possible, n
 property the pose replay has. Gameplay may branch its hashed state on *which* bodies touched
 (the pair and order are reproducible) but must not branch it on the exact impulse or point.
 
-**Not yet implemented:** the synchronised-rebuild message flow that carries a mid-match join
-over the transport (the `ISimTransport` seam, wire messages, config-hash handshake and
-confirmed-tick hash exchange now exist — see §9.1 — but `PrepareForRebuild` still restores
-into the existing world rather than recreating it, per the known gap in §9); editor tooling;
-the sample scene. Articulation and vehicle rollback now work and are measured, and a native
-multi-peer harness (`RunMultiPeerTests` in `PxwUndpwrTests`) drives two worlds over a lossy,
-latent channel and confirms their per-tick hashes agree under both solvers (see
-[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
+**Not yet implemented:** the synchronised-rebuild *message flow* that carries a mid-match join
+over the transport — the local mechanics are in place (`ISimTransport`, wire messages,
+config-hash handshake and confirmed-tick hash exchange in §9.1, and `PrepareForRebuild` now
+rebuilds the native world per §9), but nothing yet negotiates the resume tick and agreed
+snapshot between peers over the wire; editor tooling; the sample scene. Adaptive rollback is
+implemented: conditional rollback (Phase 2) and the free-running clock (Phase 3) ship opt-in
+behind `SimConfig`, see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §5–6. Articulation
+and vehicle rollback work and are measured, and a native multi-peer harness (`RunMultiPeerTests`
+in `PxwUndpwrTests`) drives two worlds over a lossy, latent channel and confirms their per-tick
+hashes agree under both solvers (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).

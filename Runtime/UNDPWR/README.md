@@ -128,6 +128,12 @@ once it has stayed below the configured speed thresholds for `SimConfig.SleepTic
 rest counter that drives that is in the snapshot, so it replays. Sleeping is off by default
 (`SleepTicks = 0` keeps everything awake); set it to turn it on.
 
+## Changelog
+
+[CHANGELOG.md](CHANGELOG.md) tracks what has landed and, critically, every change to the two
+numbers that decide whether two peers interoperate: the managed config hash and the native
+`kStateVersion`.
+
 ## Layout
 
 | folder | contents |

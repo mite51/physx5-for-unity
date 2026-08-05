@@ -228,51 +228,77 @@ keeps the fixed horizon and this document as the record of why.
 
 ## 5. Phase 2 — conditional rollback
 
-Only if phase 1 passes. Roll back when something is actually wrong, and only to where it went
-wrong.
+**Status: implemented, opt-in.** Phase 1 chose PGS (§4), which unblocked this. It ships behind
+`SimConfig.ConditionalRollback`, off by default so the fixed horizon remains the tested default
+and TGS sessions are unaffected. `Validate` refuses the flag under any solver but PGS, since a
+data-dependent rewind depth only lands where a full re-simulation would when replay is
+transparent — the property PGS was measured to have and TGS was measured to lack.
 
-- Drive rewind from the tick `InputBuffer.Submit` returns, replaying from there to
-  `CurrentTick`. The plumbing exists and is documented as advisory precisely so this could be
-  built on it later.
-- **Keep the cold-step discipline.** Restore before every step, exactly one restore, never two.
-  It is independent of the horizon — a free-running loop does `restore(T-1); step(T)` once per
-  frame and satisfies it more cheaply than the current design does — and it is what buys
-  determinism. The horizon is what costs responsiveness. They were bundled together and they
-  separate cleanly.
-- **Remove the one-confirmed-tick-per-frame cap at the same time** (§6.3). It is the other half
-  of the same constraint: it exists because a confirmed step's predecessor differs between
-  peers whose packets clumped differently, which is precisely what transparency makes
-  irrelevant. Leaving it in place would cap confirmation throughput for no remaining reason.
-- **Desync detection stops being optional.** Today, identical operation sequences are the
-  safety net and hash comparison is a diagnostic. Afterwards there is no net, and confirmed-tick
-  hash exchange is the only thing standing between a drift and a match that silently stops
-  agreeing. It ships *with* this phase, not after it. `TryGetConfirmedSnapshot`,
-  `Snapshot.CombinedHash` and `HashPerEntity` are already in place; the transport is not.
+Roll back when something is actually wrong, and only to where it went wrong.
 
-Expected cost change: from `1 + PredictionHorizon` restore-and-step pairs per frame to one,
-plus a burst on the frames a correction actually lands. That reintroduces the frame-time spike
-the current design deliberately traded away, so budget for the worst-case burst rather than the
-average — `SnapshotHistory` bounds it.
+- **Rewind is driven from the tick `InputBuffer.Submit` returns.** `RollbackEngine.SubmitInput`
+  now folds that return into `_pendingReplayFrom`, the earliest tick a misprediction has dirtied
+  since the last `Advance`. `RunPredictionConditional` replays from there to the horizon end and
+  reuses every snapshot below it. A tick that changed nothing costs nothing. The `_predictedThrough`
+  gate in `InputBuffer` is what makes the return trustworthy: local input stamped ahead by
+  `LocalInputDelay` lands as "not yet guessed" rather than as a misprediction, so it does not
+  provoke a rewind every frame.
+- **Cold-step discipline kept.** Restore before every step, exactly one restore, never two.
+  `RunPredictionConditional` restores once to `replayFrom - 1` and then re-restores before each
+  subsequent step, identical to the fixed path — the replay is just shorter.
+- **The one-confirmed-tick-per-frame cap is lifted under the flag.** `Advance` drains the whole
+  confirmed backlog (`_inputs.ConfirmedThrough`) instead of one tick. The cap existed because a
+  confirmed step's predecessor differs between TGS peers whose packets clumped differently;
+  transparency makes the predecessor irrelevant, so under PGS a confirmed tick is a pure function
+  of the confirmed snapshot before it however many drain in one frame. The cap stays for the
+  fixed-horizon (TGS-capable) path.
+- **Desync detection is mandatory with the flag.** The fixed horizon was the safety net;
+  conditional rollback removes it, leaving confirmed-tick hash exchange as the only thing between
+  a drift and a silent divergence. `SimSession` forces `SimDesyncDetector.Fatal = true` whenever
+  the config sets `ConditionalRollback`, so a session cannot turn the optimisation on and leave
+  the check off. The transport, `TryGetConfirmedSnapshot`, `Snapshot.CombinedHash` and
+  `HashPerEntity` are all in place (§9 of Architecture.md).
+
+Why this cannot desync a session even if the bookkeeping were wrong: the confirmed timeline is
+advanced first, by the same cold restore-and-step per tick as the fixed path, and its hashes are
+what peers compare. `RunPredictionConditional` only rewrites *predicted* snapshots, which are
+never exchanged. A bug in the replay-start computation could smear a peer's own prediction
+between confirmations; it cannot make two peers disagree on a confirmed tick.
+
+Expected cost change: from `1 + PredictionHorizon` restore-and-step pairs per frame to one plus
+the confirmed backlog, plus a burst on the frames a correction actually lands. That reintroduces
+the frame-time spike the fixed design deliberately traded away, so budget for the worst-case
+burst rather than the average — `SnapshotHistory` bounds it.
 
 ---
 
 ## 6. Phase 3 — a free-running clock
 
-Only if phase 2 lands.
+**Status: implemented, opt-in.** Behind `SimConfig.FreeRunningClock`, which requires
+`ConditionalRollback` (and so PGS) and is refused otherwise. Off by default.
 
-- Advance `_currentTick` once per fixed update, independently of `_confirmedTick`. Stall only
-  when the lead would outrun `SnapshotHistory`, which is a real physical limit, rather than
-  when a hashed constant says so.
-- `PredictionHorizon` stops being a simulation parameter and leaves the hash. What remains is a
-  peer-local target lead, and it can then be adapted to measured latency, which is what the
-  investigation meant by "materially better netcode".
-- Adapt the lead from observed input lateness rather than from a configured constant. This is
-  where Overwatch's time dilation belongs, and it is already legal: `LocalInputDelay` is
-  peer-local and unhashed, so a peer may retune its own lead mid-session without agreement.
+- `RollbackEngine.AdvanceFreeRunning` advances `_currentTick` once per fixed update,
+  independently of `_confirmedTick`. It stalls only when the lead would outrun the snapshot
+  ring — `SnapshotHistory - LocalInputDelay - 1`, the same live-window bound `Validate` uses,
+  which is a real physical limit rather than a hashed constant. New confirmation is always
+  processed even while pinned, because it shrinks the lead and frees the clock next frame.
+- `PredictionHorizon` stops being a simulation parameter and **leaves the hash** while the flag
+  is set (`ComputeHash` gates it on `!FreeRunningClock`, and hashes `FreeRunningClock` itself so
+  both peers agree on the rule). What remains is a peer-local target lead, readable as
+  `RollbackEngine.CurrentLead`.
+- The lead can be adapted to observed latency rather than a configured constant. This is where
+  Overwatch's time dilation belongs, and it is already legal: `LocalInputDelay` is peer-local
+  and unhashed, so a peer may retune its own lead mid-session without agreement, watching
+  `CurrentLead` and how late inputs arrive.
+- The prediction window is now variable-width, so it shares `RunPredictionConditional` with
+  Phase 2 — the routine takes the window end as a parameter (`_confirmedTick + PredictionHorizon`
+  for the fixed horizon, `_currentTick` for the free clock) and is otherwise identical.
 
 At that point the local player never waits on a remote packet, remote inputs that beat the
 delay are never predicted at all, and the ones that do not are corrected from the tick they
-went wrong.
+went wrong. As with Phase 2, none of this can desync a session: the confirmed timeline is
+advanced by the same cold restore-and-step whatever the clock is doing, and only its hashes are
+compared — mandatory and fatal here, since the fixed horizon is gone.
 
 ---
 
@@ -295,9 +321,9 @@ it:
 | phase | state | if it fails |
 | --- | --- | --- |
 | 0 — local input delay | **done** | — |
-| 1 — solver decision | `SimConfig.Solver` exists and is hashed; the three measurements are open | stop, keep the fixed horizon |
-| 2 — conditional rollback | blocked on phase 1; desync detection ships with it | stop, keep the fixed horizon |
-| 3 — free-running clock | blocked on phase 2 | keep conditional rollback, keep the fixed lead |
+| 1 — solver decision | **done**: PGS chosen and defaulted (§4) | stop, keep the fixed horizon |
+| 2 — conditional rollback | **done**, opt-in behind `SimConfig.ConditionalRollback`; requires PGS; ships with mandatory fatal desync detection | stop, keep the fixed horizon |
+| 3 — free-running clock | **done**, opt-in behind `SimConfig.FreeRunningClock`; requires conditional rollback; `PredictionHorizon` leaves the hash and becomes a peer-local lead | keep conditional rollback, keep the fixed lead |
 
 The order matters more than the schedule. Phase 1 is a measurement, not a build, and it decides
 whether phases 2 and 3 exist at all.

@@ -97,6 +97,11 @@ namespace UNDPWR.Rollback
         private int _currentTick = -1;
         private bool _stalled;
 
+        // The earliest tick a misprediction has dirtied since the last Advance, or
+        // int.MaxValue when nothing needs correcting. Only maintained under conditional
+        // rollback; the fixed-horizon path re-runs the whole window and does not consult it.
+        private int _pendingReplayFrom = int.MaxValue;
+
         /// <summary>The newest tick whose inputs are final and which will not be replayed.</summary>
         public int ConfirmedTick { get { return _confirmedTick; } }
 
@@ -125,6 +130,18 @@ namespace UNDPWR.Rollback
         /// visibly pausing it.
         /// </remarks>
         public bool IsStalled { get { return _stalled; } }
+
+        /// <summary>
+        /// How far ahead of the confirmed tick the peer is currently simulating.
+        /// </summary>
+        /// <remarks>
+        /// Under the fixed horizon this is pinned at <see cref="SimConfig.PredictionHorizon"/>.
+        /// Under the free-running clock (<see cref="SimConfig.FreeRunningClock"/>) it is
+        /// emergent: it grows when confirmations lag and shrinks as they arrive, and a policy
+        /// that wants Overwatch-style adaptation tunes the peer-local
+        /// <see cref="SimConfig.LocalInputDelay"/> from watching it.
+        /// </remarks>
+        public int CurrentLead { get { return _currentTick - _confirmedTick; } }
 
         /// <summary>How many ticks were resimulated on the most recent advance.</summary>
         public int LastReplayLength { get; private set; }
@@ -237,7 +254,15 @@ namespace UNDPWR.Rollback
         /// </remarks>
         public void SubmitInput(SimInput input)
         {
-            _inputs.Submit(input);
+            int mispredictedFrom = _inputs.Submit(input);
+
+            // Under the fixed horizon the return is advisory and ignored: the engine rewinds
+            // the whole window every tick regardless. Under conditional rollback it is the
+            // whole point -- it says how far back the next Advance has to replay from.
+            if (_config.ConditionalRollback && mispredictedFrom >= 0 && mispredictedFrom < _pendingReplayFrom)
+            {
+                _pendingReplayFrom = mispredictedFrom;
+            }
         }
 
         /// <summary>
@@ -251,32 +276,43 @@ namespace UNDPWR.Rollback
         /// <returns>False when the peer is stalled waiting for inputs.</returns>
         public bool Advance()
         {
-            // At most one confirmed tick per call, however many confirmations arrived.
+            if (_config.FreeRunningClock)
+            {
+                return AdvanceFreeRunning();
+            }
+
+            // How far the confirmed timeline may advance this call. The fixed horizon caps
+            // it at one tick; conditional rollback drains the whole backlog. See the two
+            // branches below for why the cap is safe to lift only under PGS.
             //
-            // Draining the whole confirmed backlog in one call looks harmless and is not.
-            // A confirmed tick is computed as restore(previous) then one step, and the
-            // restore is exact for everything the snapshot holds -- but not for the state
-            // the solver carries across it. The cold-step discipline below makes the
+            // Draining the whole confirmed backlog in one call looks harmless and is not,
+            // in general. A confirmed tick is computed as restore(previous) then one step,
+            // and the restore is exact for everything the snapshot holds -- but not for the
+            // state the solver carries across it. The cold-step discipline below makes the
             // predecessor's contact cache irrelevant; it does not make the predecessor
             // irrelevant, because TGS substep state survives a restore regardless.
             //
             // Draining three confirmations at once puts a confirmed step directly after
             // another confirmed step; draining them one per frame puts it after a
             // prediction run instead. Same tick, same inputs, different predecessor,
-            // different result. Since the number of confirmations arriving in a frame is a
-            // property of the network rather than of the simulation, peers would disagree
-            // about confirmed state purely because their packets clumped differently.
-            //
-            // One per call keeps the per-frame sequence identical on every peer:
+            // different result under TGS. Since the number of confirmations arriving in a
+            // frame is a property of the network rather than of the simulation, TGS peers
+            // would disagree about confirmed state purely because their packets clumped
+            // differently. The one-per-call cap keeps their per-frame sequence identical:
             // restore(c), step(c+1), capture, restore(c+1), then horizon prediction steps.
-            // It is also sustainable, because inputs are produced at the tick rate and
-            // Advance runs at the tick rate, so the steady state is exactly one.
-            int newConfirmed = Math.Min(_inputs.ConfirmedThrough, _confirmedTick + 1);
+            //
+            // Under PGS the predecessor is irrelevant, because restore-and-step was measured
+            // bitwise transparent (§4): a confirmed tick is a pure function of the confirmed
+            // snapshot before it, however many are drained in one frame. Conditional
+            // rollback lifts the cap on that basis, and Validate refuses the flag under any
+            // other solver.
+            int newConfirmed = _config.ConditionalRollback
+                ? _inputs.ConfirmedThrough
+                : Math.Min(_inputs.ConfirmedThrough, _confirmedTick + 1);
 
             // Refuse to run further ahead than the horizon. A peer that predicted further
-            // would be running a different operation sequence to everyone else, which
-            // desyncs it silently; stalling instead makes the problem visible and
-            // recoverable.
+            // would outrun the state history a late input still needs; stalling instead
+            // makes the problem visible and recoverable.
             int targetTick = _confirmedTick + _config.PredictionHorizon;
             if (newConfirmed <= _confirmedTick && _currentTick >= targetTick)
             {
@@ -284,7 +320,7 @@ namespace UNDPWR.Rollback
                 {
                     _stalled = true;
                     SimLog.Warning(string.Format(
-                        "Stalled at tick {0}: confirmed only through {1}, and the fixed prediction horizon of {2} " +
+                        "Stalled at tick {0}: confirmed only through {1}, and the prediction horizon of {2} " +
                         "ticks does not allow running further ahead. An input has {3} ticks of one-way flight " +
                         "time at this configuration; widen PredictionHorizon or LocalInputDelay to buy more.",
                         _currentTick, _confirmedTick, _config.PredictionHorizon,
@@ -300,19 +336,95 @@ namespace UNDPWR.Rollback
             }
 
             AdvanceConfirmed(newConfirmed);
-            RunPrediction();
+            if (_config.ConditionalRollback)
+            {
+                RunPredictionConditional(_confirmedTick + _config.PredictionHorizon);
+            }
+            else
+            {
+                RunPrediction();
+            }
             return true;
         }
 
         /// <summary>
-        /// Steps the confirmed timeline forward, by at most one tick per call.
+        /// Advances the free-running clock: one predicted tick of wall time, driven by the
+        /// fixed update rather than pinned to the confirmed frontier. Phase 3.
+        /// </summary>
+        /// <remarks>
+        /// The fixed horizon locks <c>CurrentTick = ConfirmedTick + PredictionHorizon</c>, so
+        /// the clock moves only when confirmation does and a whole session runs in lockstep
+        /// with its slowest link. Here the clock advances once per call regardless, and the
+        /// lead over the confirmed tick is whatever the network happens to allow. The only
+        /// hard stop is running further ahead than <see cref="SnapshotRing"/> can retain,
+        /// which is a physical limit rather than a hashed constant: a lead of
+        /// <c>SnapshotHistory - LocalInputDelay - 1</c> is the most that leaves room for both
+        /// the retained window and local input stamped ahead.
+        /// <para>
+        /// Requires conditional rollback, and therefore PGS. A free-running clock means peers
+        /// run different-length prediction windows every frame, which only lands on agreeing
+        /// confirmed state because replay is transparent and the confirmed timeline is
+        /// advanced by the same cold restore-and-step regardless of window width.
+        /// <see cref="SimConfig.Validate"/> enforces the dependency.
+        /// </para>
+        /// </remarks>
+        private bool AdvanceFreeRunning()
+        {
+            int newConfirmed = _inputs.ConfirmedThrough;
+
+            // The most the clock may lead confirmation by. Mirrors the SnapshotHistory bound
+            // Validate checks against PredictionHorizon: the ring must retain the whole live
+            // window, from the confirmed tick out to the furthest tick local input is stamped.
+            int maxLead = _config.SnapshotHistory - _config.LocalInputDelay - 1;
+            if (maxLead < 1)
+            {
+                maxLead = 1;
+            }
+
+            int nextTick = _currentTick + 1;
+            bool canAdvanceClock = (nextTick - newConfirmed) <= maxLead;
+
+            // Nothing to do only when the clock is pinned by the history limit and no fresh
+            // confirmation has arrived to relieve it. New confirmation is always worth
+            // processing -- it shrinks the lead and lets the clock move again next frame.
+            if (!canAdvanceClock && newConfirmed <= _confirmedTick)
+            {
+                if (!_stalled)
+                {
+                    _stalled = true;
+                    SimLog.Warning(string.Format(
+                        "Stalled at tick {0}: confirmed only through {1}, and the lead cannot exceed {2} ticks " +
+                        "without outrunning the {3}-tick snapshot history. Widen SnapshotHistory to lead further, " +
+                        "or the peer that is behind needs to catch up.",
+                        _currentTick, _confirmedTick, maxLead, _config.SnapshotHistory));
+                }
+                return false;
+            }
+
+            if (_stalled)
+            {
+                _stalled = false;
+                SimLog.Info(string.Format("Resumed at tick {0}", _currentTick));
+            }
+
+            AdvanceConfirmed(newConfirmed);
+
+            int windowEnd = canAdvanceClock ? nextTick : _currentTick;
+            RunPredictionConditional(windowEnd);
+            return true;
+        }
+
+        /// <summary>
+        /// Steps the confirmed timeline forward to <paramref name="newConfirmed"/>.
         /// </summary>
         /// <remarks>
         /// Each confirmed tick is computed by restoring the previous confirmed snapshot
         /// and taking exactly one step, which is the same operation on every peer, from
         /// the same bytes, with the same inputs. That is what makes the resulting hash
-        /// comparable bit-for-bit, and why <see cref="Advance"/> caps the caller at one
-        /// tick rather than letting a backlog drain in a single frame.
+        /// comparable bit-for-bit. The fixed-horizon path passes at most one more tick per
+        /// call so TGS peers, whose confirmed step depends on its predecessor, run an
+        /// identical per-frame sequence; conditional rollback drains the whole backlog
+        /// because under PGS a confirmed tick is a pure function of the snapshot before it.
         /// </remarks>
         private void AdvanceConfirmed(int newConfirmed)
         {
@@ -391,6 +503,94 @@ namespace UNDPWR.Rollback
             _currentTick = _confirmedTick + _config.PredictionHorizon;
 
             SimLog.Verbose(string.Format("Predicted {0} tick(s) from confirmed tick {1}", replayed, _confirmedTick));
+        }
+
+        /// <summary>
+        /// Resimulates the prediction window up to <paramref name="windowEnd"/>, but only
+        /// from the earliest tick a misprediction or a new confirmation actually disturbed.
+        /// Phases 2 and 3.
+        /// </summary>
+        /// <remarks>
+        /// The fixed horizon replays the whole window every tick to keep every peer's
+        /// operation sequence the same length, which is the only safety a solver without
+        /// transparent replay has. PGS has transparent replay -- restore-and-step is a pure
+        /// function of the restored snapshot (§4) -- so a shorter, data-dependent rewind
+        /// lands on exactly the state a full re-simulation would, and the redundant work is
+        /// pure cost. This replays only the ticks whose input changed
+        /// (<see cref="InputBuffer.Submit"/>'s return) or that were newly exposed above the
+        /// last simulated tick, and reuses every valid snapshot below that.
+        /// <para>
+        /// The window end is a parameter so the same routine serves both a fixed horizon
+        /// (<c>confirmed + PredictionHorizon</c>, Phase 2) and a free-running clock
+        /// (<c>CurrentTick</c>, Phase 3). On entry <see cref="_currentTick"/> is the last
+        /// tick that already has a snapshot; on exit it is <paramref name="windowEnd"/>.
+        /// </para>
+        /// <para>
+        /// The confirmed timeline is advanced first, and its hashes are what peers compare,
+        /// so a bug here can only smear this peer's own prediction between confirmations; it
+        /// cannot desync the session. Even so this keeps the same cold-step discipline as the
+        /// fixed path: one restore before every step, the first being the rewind to the tick
+        /// before the replay start, and never two restores in a row.
+        /// </para>
+        /// </remarks>
+        private void RunPredictionConditional(int windowEnd)
+        {
+            if (windowEnd < _confirmedTick)
+            {
+                windowEnd = _confirmedTick;
+            }
+
+            // Everything above the newest tick already simulated is new and unconditionally
+            // needs a step. A misprediction pulls the start earlier, but never below the
+            // first predicted tick: anything at or under the confirmed frontier was folded
+            // into the confirmed drain above, which leaves the freshly confirmed snapshot
+            // at _confirmedTick as the predecessor the prediction window replays from.
+            int replayFrom = _currentTick + 1;
+            if (_pendingReplayFrom != int.MaxValue)
+            {
+                int dirty = _pendingReplayFrom;
+                if (dirty < _confirmedTick + 1)
+                {
+                    dirty = _confirmedTick + 1;
+                }
+                if (dirty < replayFrom)
+                {
+                    replayFrom = dirty;
+                }
+            }
+            _pendingReplayFrom = int.MaxValue;
+
+            int replayed = 0;
+            if (replayFrom <= windowEnd)
+            {
+                // The predecessor snapshot is valid by construction: replayFrom is the
+                // earliest dirty tick, so replayFrom - 1 was not disturbed and its snapshot
+                // -- confirmed when it equals _confirmedTick, otherwise a prediction from a
+                // prior frame -- still holds.
+                RestoreTo(replayFrom - 1);
+                for (int tick = replayFrom; tick <= windowEnd; ++tick)
+                {
+                    // One restore before every step, exactly as RunPrediction argues: the
+                    // first is the rewind above, subsequent steps re-restore so every step
+                    // runs cold. Restoring twice would shift the rotation by one ULP.
+                    if (tick > replayFrom)
+                    {
+                        RestoreTo(tick - 1);
+                    }
+
+                    StepOnce(tick, true);
+                    CaptureInto(tick, false);
+                    ++replayed;
+                }
+
+                _currentTick = windowEnd;
+            }
+
+            LastReplayLength = replayed;
+            TotalReplayedTicks += replayed;
+
+            SimLog.Verbose(string.Format(
+                "Conditionally replayed {0} tick(s) from tick {1} to {2}", replayed, replayFrom, windowEnd));
         }
 
         private void RestoreTo(int tick)
@@ -527,7 +727,16 @@ namespace UNDPWR.Rollback
         /// <param name="resumeTick">The tick the session resumes from.</param>
         /// <param name="state">The agreed snapshot every peer restores.</param>
         /// <param name="size">How many bytes of <paramref name="state"/> are meaningful.</param>
-        public void PrepareForRebuild(int resumeTick, byte[] state, int size)
+        /// <param name="recreateWorld">
+        /// When true (the default), the native world is destroyed and rebuilt from scratch
+        /// before the snapshot is restored, so every peer — a mid-match joiner included —
+        /// reaches the identical PhysX internal arrangement. Restoring into a world that has
+        /// run a match instead is the known-incorrect path: its internal indices carry the
+        /// shape of a history the joiner never saw. Pass false only for a peer that provably
+        /// built its world in the same order the snapshot was captured under and has not
+        /// churned its registry since, which in practice means never for a real rebuild.
+        /// </param>
+        public void PrepareForRebuild(int resumeTick, byte[] state, int size, bool recreateWorld = true)
         {
             if (state == null)
             {
@@ -538,10 +747,19 @@ namespace UNDPWR.Rollback
                 throw new ArgumentOutOfRangeException("resumeTick", "Tick numbers start at zero.");
             }
 
-            SimLog.Info(string.Format("Synchronised rebuild: resuming at tick {0} from a {1} byte snapshot",
-                resumeTick, size));
+            SimLog.Info(string.Format("Synchronised rebuild: resuming at tick {0} from a {1} byte snapshot{2}",
+                resumeTick, size, recreateWorld ? ", rebuilding the native world" : ""));
 
-            _world.CommitPending();
+            if (recreateWorld)
+            {
+                // Rebuild from nothing so the internal arrangement is the one every peer
+                // reaches independently, then capture from the fresh world below.
+                _world.RecreateNativeWorld();
+            }
+            else
+            {
+                _world.CommitPending();
+            }
             _world.RestoreState(state, size);
 
             // Everything before the rebuild describes a timeline that no longer exists.
@@ -564,6 +782,7 @@ namespace UNDPWR.Rollback
             _currentTick = resumeTick;
             _stalled = false;
             LastReplayLength = 0;
+            _pendingReplayFrom = int.MaxValue;
 
             SimLog.Info(string.Format("Rebuild complete; state hash is 0x{0:X16}", hash));
         }

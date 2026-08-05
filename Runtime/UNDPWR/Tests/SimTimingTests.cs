@@ -50,6 +50,43 @@ namespace UNDPWR.Tests
             Assert.IsTrue(config.Validate(out reason), reason);
         }
 
+        [Test]
+        public void ConditionalRollbackRequiresPgs()
+        {
+            // A data-dependent rewind depth only lands where a full re-simulation would when
+            // replay is bitwise transparent, which §4 found for PGS alone. Under TGS the flag
+            // is a silent desync, so it must be refused at validation rather than discovered
+            // in play.
+            SimConfig config = SimConfig.Deterministic;
+            config.ConditionalRollback = true;
+            config.Solver = SimSolverType.TemporalGaussSeidel;
+
+            string reason;
+            Assert.IsFalse(config.Validate(out reason));
+            StringAssert.Contains("ConditionalRollback", reason);
+
+            config.Solver = SimSolverType.ProjectedGaussSeidel;
+            Assert.IsTrue(config.Validate(out reason), reason);
+        }
+
+        [Test]
+        public void FreeRunningClockRequiresConditionalRollback()
+        {
+            // A free-running clock runs a different-length window every frame, which only
+            // agrees on confirmed state because replay is transparent -- the same property
+            // conditional rollback rests on. It cannot be enabled without it.
+            SimConfig config = SimConfig.Deterministic;
+            config.FreeRunningClock = true;
+            config.ConditionalRollback = false;
+
+            string reason;
+            Assert.IsFalse(config.Validate(out reason));
+            StringAssert.Contains("FreeRunningClock", reason);
+
+            config.ConditionalRollback = true;
+            Assert.IsTrue(config.Validate(out reason), reason);
+        }
+
         // ------------------------------------------------------------------ hash ----
 
         [Test]
@@ -104,6 +141,50 @@ namespace UNDPWR.Tests
             SimConfig b = SimConfig.Deterministic;
             b.LocalInputDelay = a.LocalInputDelay + 3;
             b.SnapshotHistory = a.SnapshotHistory * 2;
+
+            Assert.AreEqual(a.ComputeHash(), b.ComputeHash());
+        }
+
+        [Test]
+        public void FreeRunningClockIsHashed()
+        {
+            // It decides whether PredictionHorizon is hashed, so two peers have to agree on
+            // it or their hashes would rest on different field sets. A mixed session is a
+            // clean rejection at join.
+            SimConfig a = SimConfig.Deterministic;
+            SimConfig b = SimConfig.Deterministic;
+            b.ConditionalRollback = true;
+            b.FreeRunningClock = true;
+
+            Assert.AreNotEqual(a.ComputeHash(), b.ComputeHash());
+        }
+
+        [Test]
+        public void PredictionHorizonLeavesTheHashWhenFreeRunning()
+        {
+            // Once the clock is free the horizon is only a peer-local target lead, so two
+            // free-running peers that chose different leads must still agree at join.
+            SimConfig a = SimConfig.Deterministic;
+            a.ConditionalRollback = true;
+            a.FreeRunningClock = true;
+
+            SimConfig b = a.Clone();
+            b.PredictionHorizon = a.PredictionHorizon + 3;
+
+            Assert.AreEqual(a.ComputeHash(), b.ComputeHash());
+        }
+
+        [Test]
+        public void ConditionalRollbackIsNotHashed()
+        {
+            // Because the confirmed timeline is advanced by a cold restore-and-step per tick
+            // whatever this flag is, and PGS makes that a pure function of the predecessor
+            // snapshot, a peer running conditional rollback and one running the fixed horizon
+            // agree on every confirmed hash. It only changes how much prediction each redoes,
+            // so hashing it would reject a session over a difference that cannot desync it.
+            SimConfig a = SimConfig.Deterministic;
+            SimConfig b = SimConfig.Deterministic;
+            b.ConditionalRollback = !a.ConditionalRollback;
 
             Assert.AreEqual(a.ComputeHash(), b.ComputeHash());
         }

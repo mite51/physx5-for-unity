@@ -157,6 +157,66 @@ namespace UNDPWR.Core
         [Tooltip("Snapshots retained. Must exceed PredictionHorizon + LocalInputDelay.")]
         public int SnapshotHistory = 32;
 
+        /// <summary>
+        /// Rewinds only as far as a misprediction or a new confirmation reaches, instead of
+        /// re-simulating the whole prediction window every tick. Phase 2 of
+        /// Documentation/AdaptiveRollbackPlan.md.
+        /// </summary>
+        /// <remarks>
+        /// Off by default, and requires <see cref="Solver"/> to be
+        /// <see cref="SimSolverType.ProjectedGaussSeidel"/>. The fixed-horizon engine re-runs
+        /// every predicted tick unconditionally so that every peer executes an identical
+        /// operation sequence, which is the safety net a solver without transparent replay
+        /// depends on. PGS was measured bitwise transparent under the cold-step discipline
+        /// (§4), which is precisely the property that makes a shorter, data-dependent rewind
+        /// land on the same state a full re-simulation would. Under any other solver a
+        /// data-dependent rewind desyncs silently, so <see cref="Validate"/> refuses it.
+        /// <para>
+        /// Peer-local and deliberately not hashed. Because the confirmed timeline is advanced
+        /// by a cold restore-and-step per tick regardless of this flag, and PGS makes that a
+        /// pure function of the predecessor snapshot, a peer running conditional rollback and
+        /// a peer running the fixed horizon compute identical confirmed hashes. This only
+        /// changes how much prediction work a peer redoes per frame, never what the
+        /// simulation agrees on. It does remove the fixed horizon as a safety net, though, so
+        /// a session that turns it on must run confirmed-hash desync detection; the
+        /// <see cref="UNDPWR.Net.SimSession"/> forces the detector fatal when it is set.
+        /// </para>
+        /// </remarks>
+        [Tooltip("Rewind only as far as needed instead of the full horizon. Requires PGS. Peer-local; need not match.")]
+        public bool ConditionalRollback = false;
+
+        /// <summary>
+        /// Runs the simulation clock off the fixed update instead of pinning it to the
+        /// confirmed tick plus <see cref="PredictionHorizon"/>. Phase 3 of
+        /// Documentation/AdaptiveRollbackPlan.md.
+        /// </summary>
+        /// <remarks>
+        /// Off by default, and requires <see cref="ConditionalRollback"/> (and therefore
+        /// <see cref="Solver"/> PGS). The fixed horizon locks the clock to the slowest link:
+        /// a peer advances only when confirmation does, so the whole session runs in lockstep
+        /// with its worst latency. A free-running clock advances once per fixed update
+        /// regardless, and the lead over the confirmed tick is whatever the network allows,
+        /// bounded only by <see cref="SnapshotHistory"/> -- a physical limit on how far back
+        /// a late input can still be applied, not a constant every peer has to share.
+        /// <para>
+        /// This is the point at which <see cref="PredictionHorizon"/> stops being a
+        /// simulation parameter: with the clock free, it is no longer the length of a shared
+        /// operation sequence, only a peer-local target lead. So it leaves the hash while this
+        /// flag is set (see <see cref="ComputeHash"/>), and a peer may retune its lead from
+        /// observed latency mid-session -- the Overwatch-style adaptation the framework was
+        /// aimed at -- without any agreement. The clock only agrees on confirmed state, which
+        /// under PGS is independent of how far ahead each peer predicted.
+        /// </para>
+        /// <para>
+        /// Unlike <see cref="ConditionalRollback"/> this <em>is</em> hashed, because it
+        /// changes the hashing rule for <see cref="PredictionHorizon"/>: two peers have to
+        /// agree on whether the horizon is a shared constant or a peer-local lead, or their
+        /// config hashes would rest on different field sets.
+        /// </para>
+        /// </remarks>
+        [Tooltip("Free-run the clock off the fixed update instead of the confirmed tick. Requires ConditionalRollback.")]
+        public bool FreeRunningClock = false;
+
         // ------------------------------------------------------------ simulation ----
 
         /// <summary>Gravity, in metres per second squared.</summary>
@@ -322,6 +382,24 @@ namespace UNDPWR.Core
                     SnapshotHistory, PredictionHorizon, LocalInputDelay);
                 return false;
             }
+            if (ConditionalRollback && Solver != SimSolverType.ProjectedGaussSeidel)
+            {
+                reason =
+                    "ConditionalRollback requires the ProjectedGaussSeidel solver. A rewind whose depth depends " +
+                    "on network timing only lands on the same state a full re-simulation would when replay is " +
+                    "bitwise transparent, which the Phase 1 measurement (AdaptiveRollbackPlan.md §4) found for " +
+                    "PGS alone. Under TGS a data-dependent rewind desyncs silently; keep the fixed horizon.";
+                return false;
+            }
+            if (FreeRunningClock && !ConditionalRollback)
+            {
+                reason =
+                    "FreeRunningClock requires ConditionalRollback. A free-running clock runs a different-length " +
+                    "prediction window every frame, which only agrees on confirmed state because replay is " +
+                    "transparent -- the same property ConditionalRollback rests on. Enable ConditionalRollback " +
+                    "(which requires PGS) first, or keep the fixed horizon.";
+                return false;
+            }
             if (DefaultDensity <= 0.0f)
             {
                 reason = "DefaultDensity must be positive.";
@@ -366,7 +444,18 @@ namespace UNDPWR.Core
         {
             ulong hash = 0xcbf29ce484222325UL;
             hash = SimHash.Combine(hash, TickRate);
-            hash = SimHash.Combine(hash, PredictionHorizon);
+
+            // Whether the clock is free-running is itself hashed, because it decides whether
+            // the next field is. A free-running peer treats PredictionHorizon as a peer-local
+            // target lead and leaves it out; a fixed-horizon peer treats it as the shared
+            // operation-sequence length and hashes it. Hashing the flag keeps both peers'
+            // hashes resting on the same field set.
+            hash = SimHash.Combine(hash, FreeRunningClock ? 1 : 0);
+            if (!FreeRunningClock)
+            {
+                hash = SimHash.Combine(hash, PredictionHorizon);
+            }
+
             hash = SimHash.Combine(hash, Gravity.x);
             hash = SimHash.Combine(hash, Gravity.y);
             hash = SimHash.Combine(hash, Gravity.z);

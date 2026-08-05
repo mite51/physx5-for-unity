@@ -8,7 +8,8 @@
 | [CrossPlatformDeterminism.md](CrossPlatformDeterminism.md) | Why peers must share a CPU architecture today, what specifically breaks between ARM and x86, what it would take to change, and how to test it cheaply. |
 
 The [package README](../README.md) is the short version: the governing rule, the measurements
-behind it, and a usage sketch.
+behind it, and a usage sketch. [CHANGELOG.md](../CHANGELOG.md) records what has landed and each
+change to the config hash and native `kStateVersion` that peers must agree on.
 
 ## Active investigation
 

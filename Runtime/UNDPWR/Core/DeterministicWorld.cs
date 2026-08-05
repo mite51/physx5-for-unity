@@ -125,7 +125,15 @@ namespace UNDPWR.Core
             }
 
             _config = config.Clone();
+            CreateNativeWorld();
+        }
 
+        /// <summary>
+        /// Creates the native scene and applies the sleep parameters, from
+        /// <see cref="_config"/>. Shared by the constructor and <see cref="RecreateNativeWorld"/>.
+        /// </summary>
+        private void CreateNativeWorld()
+        {
             SimSceneDesc desc = _config.ToSceneDesc();
             _world = NativeMethods.PxwWorldCreate(ref desc);
             if (_world == IntPtr.Zero)
@@ -177,6 +185,21 @@ namespace UNDPWR.Core
                     string.Format("Register(id {0}); that ID already belongs to another actor", stableId));
             }
 
+            PushRegistration(stableId, nativeHandle, kind);
+
+            SimEntity entity = new SimEntity(stableId, nativeHandle, kind);
+            _entities.Add(stableId, entity);
+            _pendingCommit.Add(stableId);
+            return entity;
+        }
+
+        /// <summary>
+        /// Records a handle in the native registry and pushes the deterministic body
+        /// defaults onto it. Shared by <see cref="Register"/> and the re-registration loop
+        /// in <see cref="RecreateNativeWorld"/>.
+        /// </summary>
+        private void PushRegistration(uint stableId, IntPtr nativeHandle, SimHandleKind kind)
+        {
             NativeResult result = (NativeResult)NativeMethods.PxwWorldRegister(_world, stableId, nativeHandle, (uint)kind);
             result.ThrowIfFailed(string.Format("PxwWorldRegister(id {0})", stableId));
 
@@ -193,11 +216,6 @@ namespace UNDPWR.Core
                 NativeMethods.PxwApplyDeterministicRigidDefaults(
                     nativeHandle, _config.SolverPositionIterations, _config.SolverVelocityIterations);
             }
-
-            SimEntity entity = new SimEntity(stableId, nativeHandle, kind);
-            _entities.Add(stableId, entity);
-            _pendingCommit.Add(stableId);
-            return entity;
         }
 
         /// <summary>
@@ -291,6 +309,85 @@ namespace UNDPWR.Core
 
             entity.Enabled = enabled;
             return true;
+        }
+
+        /// <summary>
+        /// Destroys the native scene and rebuilds it from scratch, re-registering every
+        /// entity in stable-ID order, for a mid-match join or a synchronised rebuild.
+        /// </summary>
+        /// <remarks>
+        /// This is the difference between a rebuild that agrees and one that only looks like
+        /// it does. PhysX assigns each actor an internal index and island node when it enters
+        /// a scene, in insertion order, and the solver visits bodies in that order — so two
+        /// peers whose internal arrangements differ sum contact impulses differently and drift
+        /// apart, however identical the state they restored. A world that has run a match has
+        /// an arrangement shaped by every add, remove, enable and disable it saw along the way,
+        /// which a joining peer cannot reproduce. Restoring an agreed snapshot into it is the
+        /// known-incorrect path (DeterminismInvestigation.md §mid-match join).
+        /// <para>
+        /// Rebuilding from nothing removes the history. Releasing the scene leaves the actors
+        /// themselves alive — they are owned by the Unity PhysX layer, not the scene — so they
+        /// can be re-added to a fresh scene, and re-adding them in stable-ID order gives every
+        /// peer, joiner included, the identical internal arrangement. The caller restores the
+        /// agreed snapshot afterwards; <see cref="UNDPWR.Rollback.RollbackEngine.PrepareForRebuild"/>
+        /// does both in the right order.
+        /// </para>
+        /// <para>
+        /// The managed registry is preserved across the rebuild, so stable IDs, kinds and
+        /// enabled state all survive. Pending, uncommitted changes are folded into the rebuild.
+        /// </para>
+        /// </remarks>
+        public void RecreateNativeWorld()
+        {
+            ThrowIfDisposed();
+
+            // Rebuild in stable-ID order, the same order CommitPending would insert in, so
+            // the fresh internal arrangement is the one every peer reaches independently.
+            List<SimEntity> ordered = new List<SimEntity>(_entities.Values);
+            ordered.Sort(CompareByStableId);
+
+            NativeMethods.PxwWorldDestroy(_world);
+            _world = IntPtr.Zero;
+
+            CreateNativeWorld();
+
+            _pendingCommit.Clear();
+            for (int i = 0; i < ordered.Count; ++i)
+            {
+                SimEntity entity = ordered[i];
+                PushRegistration(entity.StableId, entity.NativeHandle, entity.Kind);
+                _pendingCommit.Add(entity.StableId);
+            }
+
+            NativeResult commit = (NativeResult)NativeMethods.PxwWorldCommitPending(_world);
+            commit.ThrowIfFailed("PxwWorldCommitPending (rebuild)");
+            _pendingCommit.Clear();
+
+            // A fresh world starts everything enabled, so the disabled entries have to be put
+            // back the way they were before the rebuild.
+            for (int i = 0; i < ordered.Count; ++i)
+            {
+                SimEntity entity = ordered[i];
+                if (!entity.Enabled)
+                {
+                    NativeResult disable = (NativeResult)NativeMethods.PxwWorldSetEntryEnabled(
+                        _world, entity.StableId, false);
+                    if (!disable.Succeeded())
+                    {
+                        SimLog.Error(string.Format(
+                            "Rebuild: PxwWorldSetEntryEnabled(id {0}, false) returned {1}", entity.StableId, disable));
+                    }
+                }
+            }
+
+            InvalidateScratch();
+            SimLog.Info(string.Format("Native world rebuilt with {0} entities re-registered in stable-ID order",
+                ordered.Count));
+        }
+
+        private static int CompareByStableId(SimEntity a, SimEntity b)
+        {
+            return a.StableId.CompareTo(b.StableId);
         }
 
         // ------------------------------------------------------------- stepping ----

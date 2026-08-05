@@ -361,18 +361,27 @@ different amounts; 9 does not. Everything else about the scene turned out not to
 committing in stable-ID order, verified by the id-map hash, and not a live risk — but it is
 a permanent constraint on anything that registers actors, not a bug that will be fixed.
 
-**Mid-match join is not correct.** `PrepareForRebuild` restores into each peer's existing
-native world rather than recreating it, while a joining peer's world is necessarily fresh,
-and a world that has never simulated cannot match one that has. The rebuild has to destroy
-and recreate the native world on every peer, re-registering the same actors in stable-ID
-order. Unrelated to everything above.
+**Mid-match join is now correct locally.** `PrepareForRebuild` recreates the native world by
+default (`DeterministicWorld.RecreateNativeWorld`): it destroys the scene, re-registers the
+same actors in stable-ID order into a fresh one, and restores the agreed snapshot — so a
+joining peer's fresh world and every existing peer's rebuilt world reach the identical PhysX
+internal arrangement, which a restore into a warmed world could not. What remains is the *wire*
+flow that negotiates the resume tick and agreed snapshot between peers; the local rebuild it
+drives is done. Unrelated to everything above.
 
-### Why the horizon stays
+### Why the horizon stays (by default)
 
 If TGS transparency and the chain-depth limit both closed, rollback depth would no longer
 need to be synchronised across peers, and the fixed prediction horizon could go — peers would
 rewind by whatever their own latency demanded, which is materially better netcode. TGS is not
 close and the chain-depth limit is understood but not explained. Keep the fixed horizon.
+
+That is why it stays *by default*. The route to transparency by leaving TGS (below) did close,
+so the framework now ships that better netcode as an opt-in: PGS plus cold steps is measured
+transparent (§4 of AdaptiveRollbackPlan.md), and on that basis `SimConfig.ConditionalRollback`
+and `SimConfig.FreeRunningClock` let a PGS session rewind and lead by whatever its own latency
+demands, with confirmed-hash desync detection made mandatory to replace the safety net the
+fixed horizon provided. TGS sessions keep the fixed horizon, which remains the default.
 
 One option that framing skips: the route to transparency does not have to run through fixing
 TGS, because *leaving* TGS also reaches it. PGS plus cold steps is already measured transparent,
@@ -455,10 +464,16 @@ instrumentation rather than reasoning from the public API, which is why it stopp
 
 ## 10. Still to build
 
-From the original plan, untouched by this investigation: transport interface and wire
-messages, articulation and vehicle rollback state beyond the generic path, CPU/GPU backend
-mode selection, the multi-peer test harness, diagnostics and the editor overlay, and the
-scene-query and contact-event native layers.
+Most of the original list has since landed: the transport interface and wire messages
+(`ISimTransport`, `SimSession`), articulation and vehicle rollback state (measured in the
+native suite), the multi-peer test harness (`RunMultiPeerTests`), the scene-query and
+contact/trigger native layers, and framework-side sleeping (§7). Adaptive rollback landed too,
+opt-in under PGS: conditional rollback and the free-running clock (AdaptiveRollbackPlan.md
+§5–6).
 
-Added by it: deterministic framework-side sleeping, so that resting bodies can stop costing
-CPU without handing the decision back to PhysX (§7).
+What remains: the synchronised-rebuild *message flow* that carries a mid-match join over the
+transport — the local rebuild it drives is done (`DeterministicWorld.RecreateNativeWorld`),
+but nothing yet negotiates the resume tick and agreed snapshot between peers — and diagnostics
+and the editor overlay. CPU/GPU backend selection exists (`SimConfig.Backend`), with GPU gated
+behind an explicit experimental override since PhysX gives no cross-machine determinism
+guarantee for it.

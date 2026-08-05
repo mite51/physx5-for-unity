@@ -106,6 +106,17 @@ namespace UNDPWR.Net
             _configHash = config.ComputeHash();
             _localPlayerId = localPlayerId;
 
+            // Conditional rollback and the free-running clock both remove the fixed horizon
+            // that was the session's safety net: a peer that rewinds a data-dependent depth,
+            // or runs a data-dependent-length window, no longer has the identical-sequence
+            // property to fall back on, only PGS transparency. That has to be verified rather
+            // than assumed, so confirmed-hash detection becomes mandatory and fatal the moment
+            // either flag is set. AdaptiveRollbackPlan.md §5-6.
+            if (config.ConditionalRollback || config.FreeRunningClock)
+            {
+                _detector.Fatal = true;
+            }
+
             _playerIds = new uint[playerIds.Count];
             for (int i = 0; i < playerIds.Count; ++i)
             {
