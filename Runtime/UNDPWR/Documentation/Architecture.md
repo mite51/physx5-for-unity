@@ -22,7 +22,8 @@ in service of making them agree, and of noticing quickly when they do not.
 **In scope:** rigid bodies, articulations, and vehicles; rollback and prediction; mid-match
 join; desync detection; deterministic identity and mass.
 
-**Out of scope:** transport and matchmaking (you supply those behind an interface),
+**Out of scope:** the transport implementation and matchmaking (you supply a socket behind
+the `ISimTransport` interface the framework defines — see §9.1),
 rendering, gameplay logic, and cross-architecture play — see
 [CrossPlatformDeterminism.md](CrossPlatformDeterminism.md), which explains why all peers
 must currently share a CPU architecture.
@@ -595,6 +596,35 @@ alternative is a joiner that is permanently slightly wrong.
 so far behind that its rollback target has left the snapshot ring. There is one repair
 mechanism, not three.
 
+### 9.1 The transport seam
+
+The framework never touches a socket. It moves opaque byte messages through `ISimTransport`
+(`UNDPWR.Net`), so a game runs it over whatever it already uses — a relay, a mesh, or the
+in-process `SimLoopbackNetwork` used by tests. The contract is deliberately best-effort:
+messages may be lost, duplicated or reordered, and the framework tolerates all three, so the
+transport is not required to be reliable.
+
+`SimSession` ties a transport to a `RollbackEngine` and puts only three kinds of message on
+the wire (`SimMessageKind`):
+
+- **Input** — the only *simulation* data that ever crosses the network. `SimInputCodec` writes
+  a `SimInput` as its exact bits (player, tick, buttons, four axes; 28 bytes), so a peer
+  simulates precisely the value it sent. Any quantisation is the game's choice *before*
+  submit, never on the wire. Each frame re-sends a small redundancy window of recent inputs,
+  so one lost datagram is recovered by the next without a reliable channel.
+- **Handshake** — the config hash (`SimConfig.ComputeHash`, which includes `Solver` and the
+  prediction horizon) and the player set, exchanged once at join. A peer whose hash or player
+  set differs is *refused* — a PGS/TGS or horizon mismatch is a clean rejection, not a desync
+  discovered mid-match.
+- **Hash** — a confirmed tick and its `Snapshot.CombinedHash`. `SimDesyncDetector` compares
+  each peer's hash against its own for the same confirmed tick and raises the first
+  disagreement. It is diagnostic while the fixed horizon is the safety net, and becomes
+  mandatory (`SimDesyncDetector.Fatal`) once conditional rollback removes that net in Phase 2.
+
+The per-frame loop stays in the caller's hands: `session.Pump()` drains the network into the
+engine, `session.SubmitLocalInput` submits and broadcasts, `engine.Advance()` steps once, and
+`session.PublishConfirmed()` broadcasts and checks the new confirmed hash.
+
 ---
 
 ## 10. Where your game plugs in
@@ -795,11 +825,10 @@ are only approximate across a cold restore — the same "as close as possible, n
 property the pose replay has. Gameplay may branch its hashed state on *which* bodies touched
 (the pair and order are reproducible) but must not branch it on the exact impulse or point.
 
-**Not yet implemented:** the transport interface and wire messages that carry the
-synchronised rebuild; vehicle rollback state beyond the chassis rigid body; the multi-peer
-test harness; editor tooling; the sample scene. Articulation rollback now works and is
-measured (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
-
-Where this document describes something in that second list — principally the message flow
-in §9 — it describes the intended design, and the mechanism it rests on
-(`PrepareForRebuild`) does exist.
+**Not yet implemented:** the synchronised-rebuild message flow that carries a mid-match join
+over the transport (the `ISimTransport` seam, wire messages, config-hash handshake and
+confirmed-tick hash exchange now exist — see §9.1 — but `PrepareForRebuild` still restores
+into the existing world rather than recreating it, per the known gap in §9); a multi-peer
+test harness that drives two native worlds; editor tooling; the sample scene. Articulation
+and vehicle rollback now work and are measured (see
+[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
