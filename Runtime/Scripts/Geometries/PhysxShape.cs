@@ -109,7 +109,7 @@ namespace PhysX5ForUnity
 
         private string GenerateUniqueKey()
         {
-            return $"{m_geometry.NativeObjectPtr}_{m_material.GetInstanceID()}"; // this is ugly but seems to work.
+            return $"{m_geometry.NativeObjectPtr}_{m_material.GetEntityId()}"; // this is ugly but seems to work.
         }
 
         private static Dictionary<string, (IntPtr ptr, int refCount)> sm_sharedShapes = new Dictionary<string, (IntPtr ptr, int refCount)>();

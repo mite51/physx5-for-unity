@@ -82,11 +82,11 @@ namespace PhysX5ForUnity
             if (m_sdfSpacing == 0)
             {
                 // No SDF
-                key = $"g_trimesh_{m_mesh.GetInstanceID()}_{m_isConvex}_{m_buildGpuData}";
+                key = $"g_trimesh_{m_mesh.GetEntityId()}_{m_isConvex}_{m_buildGpuData}";
             }
             else
             {
-                key = $"g_trimesh_{m_mesh.GetInstanceID()}_{m_isConvex}_{m_buildGpuData}_{m_sdfSpacing}_{m_sdfSubgridSize}_{m_bitsPerSdfSubgridPixel}";
+                key = $"g_trimesh_{m_mesh.GetEntityId()}_{m_isConvex}_{m_buildGpuData}_{m_sdfSpacing}_{m_sdfSubgridSize}_{m_bitsPerSdfSubgridPixel}";
             }
             return key;
         }
