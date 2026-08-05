@@ -264,16 +264,23 @@ binder.Render(alpha);
 
 ## What the native side still owes
 
-Forces and scene queries are implemented: `SimBody` and `SimQuery` reach PhysX through the
-native plugin and run today. Contact and trigger events (`SimContacts`) are the exception —
-the managed drain runs every step but the native side returns nothing, because collecting
-events deterministically needs a `PxSimulationEventCallback` and a custom filter shader, and
-changing the filter shader risks the determinism the rest of the layer is measured against.
-See [NativeGameplayApi.md](NativeGameplayApi.md). Until that lands, gameplay that needs to know
-about an overlap uses an explicit `SimQuery.Overlap` in a step handler, which is evaluated at a
-known point in the tick rather than reported after it. The determinism-critical requirement on
-the event side is ordering: contact events must be returned in a reproducible order, because an
-unsorted set is a desync that looks like a gameplay bug.
+Forces, scene queries and contact/trigger events are all implemented: `SimBody`, `SimQuery`
+and `SimContacts` reach PhysX through the native plugin and run today. Contact and trigger
+events are collected by a `PxSimulationEventCallback` behind a notification-only filter shader
+that leaves the simulation bit-identical, then resolved to stable IDs, normalised and sorted
+before they cross the boundary, so peers and replays see the same events in the same order.
+See [NativeGameplayApi.md](NativeGameplayApi.md).
+
+Two disciplines apply to events. First, ordering is reproducible but a contact's point, normal
+and impulse are not bit-exact across a cold restore, because they come from solver warm-start
+state the snapshot does not carry: branch hashed state on *which* bodies touched, never on the
+exact impulse. Second, for a one-off overlap check an explicit `SimQuery.Overlap` in a step
+handler is often clearer than a trigger, because it is evaluated at a known point in the tick
+rather than reported after it; triggers earn their place when polling every volume every tick
+would be wasteful.
+
+What is still outstanding on the native side is vehicle rollback state beyond the chassis, and
+the transport layer — neither of which the gameplay event path depends on.
 
 ## Verification
 

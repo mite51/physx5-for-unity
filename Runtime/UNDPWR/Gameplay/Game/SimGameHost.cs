@@ -46,6 +46,15 @@ namespace UNDPWR.Gameplay
         private SimContactEvent[] _contactScratch = new SimContactEvent[256];
         private SimTriggerEvent[] _triggerScratch = new SimTriggerEvent[128];
 
+        // A drain that fills its buffer exactly may have had more to give. The native drain
+        // is idempotent within a step, so the buffer can be grown and the same step re-drained
+        // until it fits, up to this cap; past it, the overflow is warned rather than silently
+        // dropped. Truncation is deterministic (the front of the sorted list), so an overflow
+        // is a completeness problem, never a desync.
+        private const int MaxEventScratch = 8192;
+        private bool _contactOverflowWarned;
+        private bool _triggerOverflowWarned;
+
         /// <summary>Creates a host over a world, engine and ID allocator.</summary>
         public SimGameHost(DeterministicWorld world, RollbackEngine engine, StableIdAllocator ids)
         {
@@ -194,12 +203,36 @@ namespace UNDPWR.Gameplay
         void ISimStepHandler.OnAfterStep(DeterministicWorld world, int tick, bool isReplay)
         {
             int contactCount = _context.Contacts.Drain(_contactScratch);
+            while (contactCount == _contactScratch.Length && _contactScratch.Length < MaxEventScratch)
+            {
+                _contactScratch = new SimContactEvent[_contactScratch.Length * 2];
+                contactCount = _context.Contacts.Drain(_contactScratch);
+            }
+            if (contactCount == _contactScratch.Length && !_contactOverflowWarned)
+            {
+                _contactOverflowWarned = true;
+                SimLog.Warning(string.Format(
+                    "Contact events hit the {0}-event cap this step; extra contacts were dropped. " +
+                    "This is deterministic across peers but incomplete.", MaxEventScratch));
+            }
             for (int i = 0; i < contactCount; ++i)
             {
                 _gameMode.OnContact(_context, _contactScratch[i]);
             }
 
             int triggerCount = _context.Contacts.DrainTriggers(_triggerScratch);
+            while (triggerCount == _triggerScratch.Length && _triggerScratch.Length < MaxEventScratch)
+            {
+                _triggerScratch = new SimTriggerEvent[_triggerScratch.Length * 2];
+                triggerCount = _context.Contacts.DrainTriggers(_triggerScratch);
+            }
+            if (triggerCount == _triggerScratch.Length && !_triggerOverflowWarned)
+            {
+                _triggerOverflowWarned = true;
+                SimLog.Warning(string.Format(
+                    "Trigger events hit the {0}-event cap this step; extra triggers were dropped. " +
+                    "This is deterministic across peers but incomplete.", MaxEventScratch));
+            }
             for (int i = 0; i < triggerCount; ++i)
             {
                 _gameMode.OnTrigger(_context, _triggerScratch[i]);

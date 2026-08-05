@@ -754,16 +754,20 @@ from snapshotted state so that it replays, and is off by default (`SleepTicks = 
 part still on trust is a sleeper woken by a *new* contact under rollback, which
 `TestFrameworkSleepReplays` does not yet exercise.
 
-**Implemented:** forces (`AddForce`/`AddTorque`) and scene queries with stable-ID-sorted
-hits, both specified in [NativeGameplayApi.md](NativeGameplayApi.md) and backed by the native
-plugin, so `SimBody` and `SimQuery` reach PhysX and gameplay that uses them runs.
-
-**Specified, native side pending:** the contact/trigger event buffer (`SimContacts`). The
-managed drain runs every step and the native `PxwWorldDrainContacts`/`DrainTriggers` are
-present but return nothing, because a deterministic implementation needs a
-`PxSimulationEventCallback` and a custom filter shader, and changing the filter shader risks
-the determinism the rest of the layer is measured against. Until then, gameplay that needs to
-know about an overlap uses an explicit `SimQuery.Overlap` in a step handler.
+**Implemented:** forces (`AddForce`/`AddTorque`), scene queries with stable-ID-sorted hits,
+and the contact/trigger event buffer (`SimContacts`), all specified in
+[NativeGameplayApi.md](NativeGameplayApi.md) and backed by the native plugin. A UNDPWR world
+installs a `PxSimulationEventCallback` and a notification-only filter shader that ORs the
+touch, contact-point and trigger report flags onto the default behaviour without changing
+which pairs collide or get solved; the full native suite runs byte-identically with it, which
+is what let contact reporting land without moving the measured determinism. The drains resolve
+each actor to its stable ID, drop hits on unregistered actors, normalise each pair to
+`idA < idB` with the normal oriented A toward B, and sort by the ID pair, so peers and replays
+see the same events in the same order. One caveat: a contact's point, normal and impulse are
+derived from solver warm-start state, which the snapshot deliberately does not carry, so they
+are only approximate across a cold restore — the same "as close as possible, not bit-exact"
+property the pose replay has. Gameplay may branch its hashed state on *which* bodies touched
+(the pair and order are reproducible) but must not branch it on the exact impulse or point.
 
 **Not yet implemented:** the transport interface and wire messages that carry the
 synchronised rebuild; vehicle rollback state beyond the chassis rigid body; the multi-peer
