@@ -104,6 +104,74 @@ pooled out so it keeps its slot in the loop; only the optional `presentationRoot
 The framework never assumes which PhysX actor component you use — `ResolveNativeHandle` is how
 the entity hands over its body pointer.
 
+### Articulations and vehicles
+
+The handle an entity returns is not always its `PhysxActor.NativeObjectPtr`. An articulation
+registers the root's `PxArticulationReducedCoordinate`, not a link's `PxActor`, and a vehicle
+registers its `PxwVehicle`, not the chassis actor. `SimActorBridge.TryResolveHandle` resolves
+all of these from a `PhysxActor`, so a concrete entity does not have to know the rule.
+
+`SimActorBridge` and `SimVehicleCommands` live in the `UNDPWR.Unity` integration assembly
+(`using UNDPWR.Unity;`), not the core `UNDPWR` assembly. The core stays free of the
+`PhysX5ForUnity` component types on purpose — that is what lets it compile and run its
+determinism suite without an editor — so the one place that knows those types is kept separate:
+
+```csharp
+public sealed class Ragdoll : SimGameEntity
+{
+    [SerializeField] private PhysxArticulationBody _root; // the root body of the articulation
+
+    public override IntPtr ResolveNativeHandle(out SimHandleKind kind)
+    {
+        IntPtr handle;
+        if (!SimActorBridge.TryResolveHandle(_root, out handle, out kind))
+            throw new InvalidOperationException("Ragdoll articulation not created yet");
+        return handle; // kind == SimHandleKind.Articulation
+    }
+
+    protected override void CaptureState(ref SimStateWriter writer) { }
+    protected override void RestoreState(ref SimStateReader reader)  { }
+}
+```
+
+A vehicle is the same on the registration side, and adds one thing: its commands are input, so
+they ride the input frame, never the snapshot. Decode the tick's `Input` and apply it from a sim
+callback, exactly like a force — `SimVehicleCommands` does the decode and the `SetCommands` call:
+
+```csharp
+public sealed class Car : SimGameEntity
+{
+    [SerializeField] private PhysxVehicle _vehicle;
+
+    public override IntPtr ResolveNativeHandle(out SimHandleKind kind)
+    {
+        IntPtr handle;
+        if (!SimActorBridge.TryResolveHandle(_vehicle, out handle, out kind))
+            throw new InvalidOperationException("Vehicle not finalized yet");
+        return handle; // kind == SimHandleKind.Vehicle
+    }
+
+    public override void OnSimUpdate(int tick, bool isReplay)
+    {
+        // Runs on the original tick and on every replay, so the command is reproduced
+        // exactly. Applying it from Update instead would land on one pass and not the other.
+        SimVehicleCommands.Apply(_vehicle, Input);
+    }
+
+    protected override void CaptureState(ref SimStateWriter writer) { }
+    protected override void RestoreState(ref SimStateReader reader)  { }
+}
+```
+
+The vehicle's wheel, suspension, sticky-tire and drivetrain state rolls back inside the physics
+channel (the native snapshot carries it); the managed `CaptureState`/`RestoreState` above only
+needs to carry whatever *gameplay* state the car adds on top, such as a boost charge.
+
+Two setup rules the bridge cannot enforce for you: create the actor in the world's scene
+(`world.ScenePtr`), and do not let the Unity component add itself to that scene through its own
+`OnEnable` — the world adds it, in stable-ID order, when it commits the registry. Adding it twice,
+or in a different order on another peer, is a desync that looks like a physics bug.
+
 ## Actions
 
 An action is a discrete change submitted rather than done inline, so every such change lands on

@@ -687,6 +687,28 @@ namespace UNDPWR.Core
         /// <summary>What kind of object the handle refers to.</summary>
         public SimHandleKind Kind { get; private set; }
 
+        private IntPtr _bodyHandle;
+
+        /// <summary>
+        /// The <c>PxRigidActor</c> that body I/O (forces, velocities, pose) acts on. Equal to
+        /// <see cref="NativeHandle"/> for every kind except <see cref="SimHandleKind.Vehicle"/>,
+        /// which registers by its <c>PxwVehicle</c> handle but is pushed and read through its
+        /// chassis. Resolved once and cached, since the chassis is fixed for the vehicle's life.
+        /// </summary>
+        public IntPtr BodyHandle
+        {
+            get
+            {
+                if (_bodyHandle == IntPtr.Zero)
+                {
+                    _bodyHandle = Kind == SimHandleKind.Vehicle
+                        ? NativeMethods.GetVehicleActor(NativeHandle)
+                        : NativeHandle;
+                }
+                return _bodyHandle;
+            }
+        }
+
         /// <summary>
         /// Whether the entity is currently simulated. Set through
         /// <see cref="DeterministicWorld.SetEntityEnabled"/>, never directly.

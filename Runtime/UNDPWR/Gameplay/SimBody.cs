@@ -17,9 +17,10 @@ namespace UNDPWR.Gameplay
     /// anywhere the world is not mid-simulate, but gameplay that feeds a read back into a
     /// force must do both inside the same step handler.
     /// <para>
-    /// This is a thin static wrapper over the native per-body entry points. It takes the
-    /// <c>PxActor</c> handle from <see cref="SimEntity.NativeHandle"/>; the overloads that
-    /// take a <see cref="SimEntity"/> are the same call with the handle pulled out.
+    /// This is a thin static wrapper over the native per-body entry points. The overloads
+    /// that take a <see cref="SimEntity"/> resolve it through <see cref="SimEntity.BodyHandle"/>,
+    /// which is the entity's <c>PxActor</c> for every kind except a vehicle, whose body I/O
+    /// acts on the chassis rather than the <c>PxwVehicle</c> handle it registered under.
     /// </para>
     /// </remarks>
     public static class SimBody
@@ -147,7 +148,9 @@ namespace UNDPWR.Gameplay
             {
                 throw new ArgumentNullException("entity");
             }
-            return entity.NativeHandle;
+            // A vehicle registers by its PxwVehicle handle but is pushed and read through its
+            // chassis PxRigidActor; BodyHandle is that resolution for every kind.
+            return entity.BodyHandle;
         }
     }
 }

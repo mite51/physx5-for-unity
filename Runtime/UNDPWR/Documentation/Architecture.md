@@ -203,6 +203,27 @@ For anything that comes and goes — projectiles, debris, pooled effects — use
 entity's slot in the snapshot layout. Unregistering changes the layout, and a layout change
 mid-session must be agreed by every peer, which is a much bigger commitment than it looks.
 
+### 4.4 The component bridge lives outside the core
+
+`DeterministicWorld.Register` takes a raw native handle and a `SimHandleKind`, not a Unity
+component. That is deliberate: the core `UNDPWR` assembly never references the
+`PhysX5ForUnity` component types, which is what lets the whole core compile and run its
+determinism suite against `Tests~/Managed` without an editor. The one place that knows those
+types is the separate `UNDPWR.Unity` integration assembly:
+
+- `SimActorBridge` maps a `PhysxActor` to the `(handle, kind)` the registry expects. The
+  handle is not always the component's `NativeObjectPtr`: an articulation registers the
+  root's `PxArticulationReducedCoordinate` (`GetArticulation()`), a vehicle registers its
+  `PxwVehicle` (`VehiclePtr`), and a link that is not the root has no handle of its own.
+- `SimVehicleCommands` decodes a `SimInput` into brake/throttle/steer/handbrake and pushes it
+  through `PhysxVehicle.SetCommands`. Vehicle commands are **input**, not snapshot state, so
+  they ride the input frame and are re-applied on every replay tick, exactly like a force.
+
+Body I/O reconciles the vehicle's two handles for the caller: a vehicle registers by its
+`PxwVehicle` handle, but `SimBody` acts on the chassis `PxRigidActor`. `SimEntity.BodyHandle`
+resolves that once (via the native `GetVehicleActor`) and caches it, so `SimBody.AddForce`
+and the reads work on a vehicle entity without the caller thinking about it.
+
 ---
 
 ## 5. State: what a snapshot is

@@ -1,0 +1,17 @@
+{
+    "name": "UNDPWR.Unity",
+    "rootNamespace": "UNDPWR.Unity",
+    "references": [
+        "UNDPWR",
+        "PhysX5ForUnity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -91,6 +91,11 @@ namespace UNDPWR.Interop
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern float PxwBodyGetMass(IntPtr actor);
 
+        // A vehicle is registered by its PxwVehicle handle, but body I/O acts on the chassis
+        // PxRigidActor. This resolves one to the other so SimBody can take a vehicle entity.
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr GetVehicleActor(IntPtr vehicle);
+
         // -------------------------------------------------------- scene queries ----
         //
         // World-level queries that resolve every hit to a stable ID and return the hits in
