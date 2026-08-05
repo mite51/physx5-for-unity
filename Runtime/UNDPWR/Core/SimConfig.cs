@@ -30,6 +30,29 @@ namespace UNDPWR.Core
     }
 
     /// <summary>
+    /// Which constraint solver PhysX runs. Mirrors <c>PxSolverType</c>.
+    /// </summary>
+    /// <remarks>
+    /// This choice reaches further than solver quality, because it decides whether replay
+    /// is transparent, and transparency is what a variable rollback depth rests on. See
+    /// <see cref="SimConfig.Solver"/>.
+    /// </remarks>
+    public enum SimSolverType
+    {
+        /// <summary>
+        /// Projected Gauss-Seidel. The only solver measured to make replay bitwise
+        /// transparent under the cold-step discipline.
+        /// </summary>
+        ProjectedGaussSeidel = 0,
+
+        /// <summary>
+        /// Temporal Gauss-Seidel. Carries per-substep state that a restore does not reach,
+        /// so replay is never transparent. The current default.
+        /// </summary>
+        TemporalGaussSeidel = 1
+    }
+
+    /// <summary>
     /// Everything that must be identical on every peer for the simulation to agree.
     /// </summary>
     /// <remarks>
@@ -62,31 +85,105 @@ namespace UNDPWR.Core
         /// How many ticks ahead of the last confirmed tick a peer simulates.
         /// </summary>
         /// <remarks>
-        /// This is fixed rather than derived from measured latency, and that is the whole
-        /// basis of bit-exact hashing. Every peer performing the identical sequence of
-        /// operations every tick is what keeps them bit-identical; a peer that rewound
-        /// three ticks and one that rewound five have different histories and will drift
-        /// apart, slowly but measurably.
+        /// Fixed rather than derived from measured latency, and hashed, because the engine
+        /// replays this whole window every tick: the horizon is the length of every peer's
+        /// per-frame operation sequence, and those sequences have to match.
         /// <para>
-        /// The cost is that a peer whose inputs arrive later than this horizon stalls
-        /// rather than predicting further ahead. Size it for the worst round trip the
-        /// session should tolerate: at 60 Hz, 6 ticks is 100 ms.
+        /// The reason they have to match is narrower than it looks, and it is not that a
+        /// rewind is lossy. <c>restore(S); step()</c> was measured to be a pure function of
+        /// <c>S</c>, and under PGS the cold-step discipline makes replay bitwise
+        /// transparent outright, with peers rewinding by four and by sixteen landing on
+        /// identical state. The framework runs TGS, which carries per-substep state that a
+        /// restore does not reach and nothing exposed clears. The residual is far below the
+        /// resolution of captured state, so one divergent rollback shows nothing at all,
+        /// and then it accumulates for a few hundred frames and flips a bit long after the
+        /// frame that caused it. Invisible once and fatal later is the worst shape a bug
+        /// can have, so peers rewind the same amount every tick regardless of what their
+        /// network delivered. Documentation/DeterminismInvestigation.md section 8 records
+        /// what would have to change for this to become adaptive.
+        /// </para>
+        /// <para>
+        /// Together with <see cref="LocalInputDelay"/> this sets the latency budget: an
+        /// input has <c>PredictionHorizon + LocalInputDelay - 1</c> ticks of flight time
+        /// before the peers waiting on it stall, which is 116 ms at the defaults. That is
+        /// one-way delivery, not a round trip; nothing in the loop waits for a reply.
+        /// Widening the horizon buys tolerance at the cost of a longer replay every frame
+        /// and more of the window being guessed. Widening the delay buys the same tolerance
+        /// at the cost of local input latency, and removes mispredictions rather than
+        /// absorbing them.
         /// </para>
         /// </remarks>
         [Tooltip("Fixed number of ticks predicted ahead of the confirmed tick. Must match on every peer.")]
         public int PredictionHorizon = 6;
 
         /// <summary>
+        /// How many ticks ahead of the tick it is simulating a peer stamps its own input.
+        /// </summary>
+        /// <remarks>
+        /// Peer-local, and deliberately not hashed. An input carries the tick it applies to
+        /// and is applied at that tick whenever it arrives, so a peer delaying by two and a
+        /// peer delaying by five still simulate the identical input timeline. This is the
+        /// one timing field a session does not have to agree on, though a competitive game
+        /// will want to agree on it anyway for fairness.
+        /// <para>
+        /// What it buys is mispredictions that never happen. A remote input is first
+        /// guessed <c>LocalInputDelay</c> ticks after its sender produced it, so anything
+        /// that crosses the network faster than that is already in hand before the guess is
+        /// made. Below the delay there is nothing to correct; above it, prediction and the
+        /// horizon take over as before.
+        /// </para>
+        /// <para>
+        /// The cost is exactly what it sounds like: the local player's own action happens
+        /// this many ticks after they asked for it. The default spends 33 ms of that to
+        /// stop remote players snapping on every input change, which is the trade most
+        /// games want. Zero restores the older behaviour of stamping input for the current
+        /// tick, the most responsive setting and the one that mispredicts most.
+        /// </para>
+        /// </remarks>
+        [Tooltip("Ticks of delay applied to local input before it is stamped. Peer-local; need not match.")]
+        public int LocalInputDelay = 2;
+
+        /// <summary>
         /// How many past ticks of state are retained, bounding rollback distance and
         /// deciding how far back a late input can still be applied.
         /// </summary>
-        [Tooltip("Snapshots retained. Must be larger than PredictionHorizon.")]
+        /// <remarks>
+        /// Peer-local and not hashed: a peer that retains more history than another
+        /// simulates no differently, it just tolerates a later input. It has to cover the
+        /// whole live window, which runs from the confirmed tick to the furthest tick any
+        /// input has been stamped for, so <see cref="Validate"/> requires it to exceed
+        /// <see cref="PredictionHorizon"/> plus <see cref="LocalInputDelay"/>.
+        /// </remarks>
+        [Tooltip("Snapshots retained. Must exceed PredictionHorizon + LocalInputDelay.")]
         public int SnapshotHistory = 32;
 
         // ------------------------------------------------------------ simulation ----
 
         /// <summary>Gravity, in metres per second squared.</summary>
         public Vector3 Gravity = new Vector3(0.0f, -9.81f, 0.0f);
+
+        /// <summary>
+        /// Which constraint solver runs. Hashed, since a session cannot mix the two.
+        /// </summary>
+        /// <remarks>
+        /// TGS is the default and was chosen for stack and articulation stability. It is
+        /// also the reason <see cref="PredictionHorizon"/> has to be fixed: TGS carries
+        /// per-substep state that a restore does not reach, so replay is never bitwise
+        /// transparent and peers must all rewind by the same amount.
+        /// <para>
+        /// PGS is transparent under the cold-step discipline, which is what an adaptive
+        /// horizon would need. The stack-stability argument for TGS is also weaker than it
+        /// looks once every step is cold: on the 16-high stack the native suite measures
+        /// PGS-cold settling to a residual 0.000146 m/s against TGS-cold's 0.003556 m/s.
+        /// What is not yet measured is articulations, vehicles and high mass ratios, and a
+        /// contact chain deeper than 8 bodies defeats variable rollback depth on either
+        /// solver. Documentation/AdaptiveRollbackPlan.md stages that decision; until it is
+        /// made, this field exists so the experiment can be run, not so the default can be
+        /// changed casually.
+        /// </para>
+        /// </remarks>
+        [Tooltip("Constraint solver. Must match on every peer. See AdaptiveRollbackPlan.md before changing.")]
+        public SimSolverType Solver = SimSolverType.TemporalGaussSeidel;
 
         /// <summary>Solver position iterations applied to every dynamic body.</summary>
         public uint SolverPositionIterations = 8;
@@ -206,12 +303,18 @@ namespace UNDPWR.Core
                 reason = "PredictionHorizon cannot be negative.";
                 return false;
             }
-            if (SnapshotHistory <= PredictionHorizon)
+            if (LocalInputDelay < 0)
+            {
+                reason = "LocalInputDelay cannot be negative.";
+                return false;
+            }
+            if (SnapshotHistory <= PredictionHorizon + LocalInputDelay)
             {
                 reason = string.Format(
-                    "SnapshotHistory ({0}) must exceed PredictionHorizon ({1}), otherwise the tick a rollback " +
-                    "needs to rewind to has already been overwritten.",
-                    SnapshotHistory, PredictionHorizon);
+                    "SnapshotHistory ({0}) must exceed PredictionHorizon ({1}) plus LocalInputDelay ({2}), which " +
+                    "together span the live window from the confirmed tick to the furthest tick input has been " +
+                    "stamped for. Below that, a tick a rollback still needs has already been overwritten.",
+                    SnapshotHistory, PredictionHorizon, LocalInputDelay);
                 return false;
             }
             if (DefaultDensity <= 0.0f)
@@ -246,6 +349,13 @@ namespace UNDPWR.Core
         /// than diagnosing the resulting desync twenty seconds in. Fields that only
         /// affect diagnostics, such as <see cref="DisablePvd"/>, are excluded so that a
         /// peer running with the debugger attached is not rejected.
+        /// <para>
+        /// <see cref="LocalInputDelay"/> and <see cref="SnapshotHistory"/> are excluded for
+        /// a different reason: they are peer-local latency choices that change when a peer
+        /// produces an input and how long it keeps a snapshot, never what the simulation
+        /// does with either. Hashing them would reject a session over a difference that
+        /// cannot desync it.
+        /// </para>
         /// </remarks>
         public ulong ComputeHash()
         {
@@ -255,6 +365,7 @@ namespace UNDPWR.Core
             hash = SimHash.Combine(hash, Gravity.x);
             hash = SimHash.Combine(hash, Gravity.y);
             hash = SimHash.Combine(hash, Gravity.z);
+            hash = SimHash.Combine(hash, (int)Solver);
             hash = SimHash.Combine(hash, (int)SolverPositionIterations);
             hash = SimHash.Combine(hash, (int)SolverVelocityIterations);
             hash = SimHash.Combine(hash, BounceThresholdVelocity);
@@ -293,9 +404,7 @@ namespace UNDPWR.Core
             // different gameplay decision.
             desc.PruningStructureType = 1;
 
-            // PxSolverType::eTGS. More stable for stacks and articulations than PGS, and
-            // fixed for the same reason as the pruner.
-            desc.SolverType = 1;
+            desc.SolverType = (int)Solver;
 
             desc.BroadPhaseType = -1;
             desc.CpuWorkerThreads = CpuWorkerThreads;

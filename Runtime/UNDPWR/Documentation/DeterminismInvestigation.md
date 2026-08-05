@@ -121,6 +121,15 @@ warm starting exists for — the warm run settles to y=1.499931 and the cold run
 0.000146 m/s cold, roughly 20x quieter. Treat as provisional: it measures settling quality,
 not CPU time, and does not yet cover high mass ratios, articulations or vehicles.
 
+**Cold PGS beats cold TGS on the workload TGS was chosen for.** The comparison above is
+PGS-warm against PGS-cold, which is not the comparison the framework faces: it always runs
+cold, so the question is cold against cold. `MeasureColdStepCost` already prints both, and
+on the 16-high stack the cold rows are 0.000146 m/s residual under PGS against 0.003556 m/s
+under TGS — PGS about 24x quieter — with settled height 1.499999 against 1.499998. TGS was
+selected for stack stability, and once every step is cold it does not have it. Same caveat
+as above: box stacks only, nothing here covers articulations, vehicles or high mass ratios,
+which is the measurement §8 still wants.
+
 ---
 
 ## 4. What changed
@@ -356,6 +365,15 @@ If TGS transparency and the chain-depth limit both closed, rollback depth would 
 need to be synchronised across peers, and the fixed prediction horizon could go — peers would
 rewind by whatever their own latency demanded, which is materially better netcode. TGS is not
 close and the chain-depth limit is understood but not explained. Keep the fixed horizon.
+
+One option that framing skips: the route to transparency does not have to run through fixing
+TGS, because *leaving* TGS also reaches it. PGS plus cold steps is already measured transparent,
+and §3 measured PGS-cold settling a 16-high stack **better** than warm — 1.499999 against
+1.499931, residual velocity 0.000146 m/s against 0.002971 m/s — which undercuts the stack
+stability that TGS was selected for in the first place. Articulations, vehicles and high mass
+ratios are unmeasured on PGS and are the reason this is not simply a one-line change. That
+measurement, and what it unblocks if it comes back clean, is staged in
+[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md).
 
 ---
 

@@ -1,3 +1,4 @@
+using System;
 using NUnit.Framework;
 using UnityEngine;
 using UNDPWR.Core;
@@ -69,9 +70,22 @@ namespace UNDPWR.Tests
         [Test]
         public void OneBitDifferenceChangesHash()
         {
-            ulong baseline = HashOf(1.0f, 2.0f, 3);
-            ulong changed = HashOf(1.0f, 2.0000001f, 3);
-            Assert.AreNotEqual(baseline, changed);
+            // Written out in decimal this does not work. Floats in [2, 4) are spaced
+            // 2.38e-07 apart, so 2.0000001f is short of the halfway point to the next one
+            // and rounds back to exactly 2.0f — the test then compares a value against
+            // itself and reports that the hash is insensitive. Step the bits instead.
+            float baseline = 2.0f;
+            float oneUlpUp = NextFloatUp(baseline);
+            Assert.AreNotEqual(baseline, oneUlpUp, "the two values must genuinely differ");
+
+            Assert.AreNotEqual(HashOf(1.0f, baseline, 3), HashOf(1.0f, oneUlpUp, 3));
+        }
+
+        /// <summary>The next representable float above a positive value.</summary>
+        private static float NextFloatUp(float value)
+        {
+            int bits = BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+            return BitConverter.ToSingle(BitConverter.GetBytes(bits + 1), 0);
         }
 
         [Test]

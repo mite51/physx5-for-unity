@@ -50,16 +50,21 @@ namespace UNDPWR.Rollback
     /// the entire reason confirmed-tick hashes can be compared bit-for-bit, and it is why
     /// the prediction horizon is fixed rather than adapted to measured latency.
     ///
-    /// <para>The measurements behind that rule, from the native suite: a peer that
-    /// rewinds and resimulates does not reproduce its own earlier trace, because PhysX
-    /// warm-starts its solver from contact impulses held in persistent manifolds that no
-    /// public API can read or write. The error is small, around 2e-06 m over thirty
-    /// ticks, but it is not zero and it compounds. No contact reset mode fixes it:
-    /// replaying sixteen ticks into a world with no history reproduces zero of them with
-    /// the caches left alone, zero with <c>resetFiltering</c>, and one with a full
-    /// reinsert. So a peer that rewound three ticks and a peer that rewound five are
-    /// simply different, and the only way to keep them identical is to have them rewind
-    /// the same amount.</para>
+    /// <para>What the measurements actually say, from the native suite, because the
+    /// obvious explanation is the wrong one. A rewind is not lossy: <c>restore(S);
+    /// step()</c> is a pure function of <c>S</c>, and two worlds driven along
+    /// deliberately different histories agree bit-for-bit from the moment they are handed
+    /// the same snapshot. Under PGS the cold-step discipline below makes replay bitwise
+    /// transparent outright, and peers rewinding by four and by sixteen land on identical
+    /// state. The framework runs TGS, which carries per-substep state that a restore does
+    /// not reach and that nothing exposed clears, so a peer that rewound three ticks and
+    /// one that rewound five differ by a residual of about 3e-09 m/s on the first replayed
+    /// step. That is far below the resolution of captured state, so a single divergent
+    /// rollback shows nothing at all, and then it accumulates for a few hundred frames and
+    /// flips a bit long after anything that could be blamed for it. Invisible once and
+    /// fatal later is the worst shape a bug can have, so peers rewind the same amount every
+    /// tick. Documentation/DeterminismInvestigation.md section 8 records what would have to
+    /// change for the horizon to become adaptive.</para>
     ///
     /// <para><b>What a tick looks like.</b> Every tick, unconditionally:</para>
     /// <list type="number">
@@ -97,6 +102,18 @@ namespace UNDPWR.Rollback
 
         /// <summary>The newest tick simulated, confirmed or predicted.</summary>
         public int CurrentTick { get { return _currentTick; } }
+
+        /// <summary>
+        /// The tick a local input sampled right now should be stamped for.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="CurrentTick"/> plus <see cref="SimConfig.LocalInputDelay"/>. Build
+        /// local input against this rather than against <see cref="CurrentTick"/>: a tick
+        /// stamped further ahead reaches the other peers before they have to guess at it,
+        /// which is the difference between a remote player who moves and one who moves and
+        /// then snaps somewhere else.
+        /// </remarks>
+        public int LocalInputTick { get { return _currentTick + _config.LocalInputDelay; } }
 
         /// <summary>
         /// True when the peer is waiting for inputs rather than advancing.
@@ -207,10 +224,16 @@ namespace UNDPWR.Rollback
         /// Records a received input, which may make more ticks confirmable.
         /// </summary>
         /// <remarks>
+        /// Takes the local peer's own input as well as everything that arrived over the
+        /// network; the two are the same thing once stamped. Stamp local input with
+        /// <see cref="LocalInputTick"/> rather than <see cref="CurrentTick"/> so it reaches
+        /// the other peers before they guess at it.
+        /// <para>
         /// Note what this deliberately does not do: it does not trigger a rollback. The
         /// engine rewinds on a fixed schedule in <see cref="Advance"/> whether or not a
         /// misprediction happened, because rewinding only when mispredicted would make
         /// the operation sequence depend on network timing and differ between peers.
+        /// </para>
         /// </remarks>
         public void SubmitInput(SimInput input)
         {
@@ -231,16 +254,18 @@ namespace UNDPWR.Rollback
             // At most one confirmed tick per call, however many confirmations arrived.
             //
             // Draining the whole confirmed backlog in one call looks harmless and is not.
-            // A confirmed tick is computed as restore(previous) then one step, and while
-            // the restore is exact for everything a snapshot holds, PhysX's warm-start
-            // contact impulses are not in the snapshot and carry over from whichever step
-            // ran immediately before. Draining three confirmations at once puts a confirmed
-            // step directly after another confirmed step; draining them one per frame puts
-            // it after a prediction run instead. Same tick, same inputs, different
-            // predecessor, different result. Since the number of confirmations arriving in
-            // a frame is a property of the network rather than of the simulation, peers
-            // would disagree about confirmed state purely because their packets clumped
-            // differently.
+            // A confirmed tick is computed as restore(previous) then one step, and the
+            // restore is exact for everything the snapshot holds -- but not for the state
+            // the solver carries across it. The cold-step discipline below makes the
+            // predecessor's contact cache irrelevant; it does not make the predecessor
+            // irrelevant, because TGS substep state survives a restore regardless.
+            //
+            // Draining three confirmations at once puts a confirmed step directly after
+            // another confirmed step; draining them one per frame puts it after a
+            // prediction run instead. Same tick, same inputs, different predecessor,
+            // different result. Since the number of confirmations arriving in a frame is a
+            // property of the network rather than of the simulation, peers would disagree
+            // about confirmed state purely because their packets clumped differently.
             //
             // One per call keeps the per-frame sequence identical on every peer:
             // restore(c), step(c+1), capture, restore(c+1), then horizon prediction steps.
@@ -260,8 +285,10 @@ namespace UNDPWR.Rollback
                     _stalled = true;
                     SimLog.Warning(string.Format(
                         "Stalled at tick {0}: confirmed only through {1}, and the fixed prediction horizon of {2} " +
-                        "ticks does not allow running further ahead.",
-                        _currentTick, _confirmedTick, _config.PredictionHorizon));
+                        "ticks does not allow running further ahead. An input has {3} ticks of one-way flight " +
+                        "time at this configuration; widen PredictionHorizon or LocalInputDelay to buy more.",
+                        _currentTick, _confirmedTick, _config.PredictionHorizon,
+                        _config.PredictionHorizon + _config.LocalInputDelay - 1));
                 }
                 return false;
             }

@@ -51,6 +51,34 @@ same procedure is the recovery path when a desync is detected.
 **Confirmed-tick hashes can be compared bit-for-bit.** Because of the two points above,
 and only because of them.
 
+## Latency: two knobs, not one
+
+`PredictionHorizon` is not the only thing standing between a peer and a late packet, and
+it is the more expensive of the two.
+
+`SimConfig.LocalInputDelay` stamps a peer's own input that many ticks further ahead than
+the tick it is currently simulating. An input is first *guessed* by the other peers
+`LocalInputDelay` ticks after its sender produced it, so anything crossing the network
+faster than the delay arrives before anyone predicts it — there is nothing to mispredict
+and nothing to correct. Past the delay, prediction and the horizon take over as before.
+
+The two knobs bound different failures:
+
+| condition | consequence |
+| --- | --- |
+| one-way latency ≤ `LocalInputDelay` | that input is never predicted, so it never mispredicts |
+| ≤ `PredictionHorizon + LocalInputDelay - 1` | predicted, corrected on arrival, no stall |
+| beyond that | the peers waiting on it stall |
+
+At the defaults — horizon 6, delay 2, 60 Hz — inputs under 33 ms are simulated exactly and
+inputs under 116 ms never stall anyone.
+
+Unlike the horizon, the delay is **peer-local and not hashed**. An input carries the tick
+it applies to and is applied at that tick whenever it arrives, so a peer delaying by two
+and a peer delaying by five simulate the identical input timeline. It costs local
+responsiveness and nothing else, which makes it the first knob to reach for; the horizon
+costs a longer replay every single frame.
+
 ## Determinism hazards this framework handles for you
 
 **Actor insertion order.** PhysX only guarantees reproducible results when actors enter
@@ -122,7 +150,8 @@ ownership, the join and resync procedure, where gameplay plugs in, and a failure
 ```csharp
 var config = SimConfig.Deterministic;
 config.TickRate = 60;
-config.PredictionHorizon = 6;   // 100 ms of tolerance
+config.PredictionHorizon = 6;   // hashed; must match on every peer
+config.LocalInputDelay  = 2;    // peer-local; 33 ms of mispredict-free budget
 
 SimLog.AttachNativeSink();
 
@@ -138,7 +167,7 @@ engine.AddHandler(new MyGameplay());   // all simulation effects go through here
 engine.Initialise();
 
 // once per fixed update
-engine.SubmitInput(localInput);
+engine.SubmitInput(SampleLocalInput(engine.LocalInputTick));   // not engine.CurrentTick
 engine.Advance();
 ```
 

@@ -49,6 +49,10 @@ namespace UNDPWR.Tests
         }
 
         [Test]
+        // SimFixedInputFrame builds its rotation with Quaternion.Euler, which is a native
+        // internal call. The standalone runner in Tests~/Managed cannot execute it and
+        // skips this category; Unity's Test Runner runs it normally.
+        [Category("RequiresUnityRuntime")]
         public void FixedFrameRotatesInput()
         {
             // A 90-degree fixed frame turns "forward" into world +X.

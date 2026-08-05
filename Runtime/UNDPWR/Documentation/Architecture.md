@@ -301,8 +301,9 @@ exactly the moment the simulation is busiest.
 Capacity bounds how far back a late input can be honoured. An input older than the ring
 cannot be applied, because the state it would apply to is gone — that peer has exceeded the
 session's latency budget and needs a resynchronisation (§9). `SimConfig.Validate` enforces
-`SnapshotHistory > PredictionHorizon`, otherwise the tick a rollback needs has already been
-overwritten by the prediction that followed it.
+`SnapshotHistory > PredictionHorizon + LocalInputDelay`: those two together span the live
+window, from the confirmed tick out to the furthest tick any input has been stamped for
+(§7.4). Below that, the tick a rollback still needs has already been overwritten.
 
 Buffers are handed out via `BeginWrite` / `CompleteWrite` so a capture writes straight into
 the ring rather than into a temporary that then gets copied.
@@ -421,8 +422,11 @@ and simulates nothing.
 
 Stalling is deliberate. Predicting further ahead would make this peer's sequence longer
 than everyone else's and desync it *silently*; stalling makes the problem visible, bounded
-and recoverable. Size `PredictionHorizon` for the worst round trip the session should
-tolerate — at 60 Hz, 6 ticks is 100 ms.
+and recoverable.
+
+The budget being exhausted is `PredictionHorizon + LocalInputDelay - 1` ticks of **one-way**
+delivery, not a round trip — 116 ms at the defaults. §7.4 works the timing through and
+explains which of the two knobs to widen.
 
 ---
 
@@ -456,6 +460,38 @@ received. It only moves forward, and `RecomputeConfirmedFrontier` walks from its
 position rather than rescanning, so it is O(1) amortised.
 
 This value is what gates §6.2 — it is the boundary between "final" and "guessed".
+
+### 7.4 Local input delay
+
+A peer stamps its own input for `RollbackEngine.LocalInputTick`, which is `CurrentTick`
+plus `SimConfig.LocalInputDelay`, rather than for the tick it is simulating right now.
+
+The point is to arrive ahead of the guess. Work the timing through with all peers' confirmed
+clocks advancing together, which is what §6.3 enforces. Peer Q stamps an input for tick
+`T = c + horizon + delay` while its confirmed tick is `c`. Peer P first *predicts* tick `T`
+when its own window reaches it, at confirmed `T - horizon` — which is `delay` ticks of wall
+time later. P must *confirm* `T` at confirmed `T - 1`, which is `horizon + delay - 1` ticks
+later. So:
+
+| one-way latency | outcome |
+| --- | --- |
+| ≤ `LocalInputDelay` | the input is in hand before anyone predicts it; no misprediction |
+| ≤ `PredictionHorizon + LocalInputDelay - 1` | predicted, then corrected on arrival; no stall |
+| beyond | the peers waiting on it stall (§6.4) |
+
+Note that this is one-way delivery in both rows. Nothing in the loop waits for a reply, so
+sizing either knob against a round trip overprovisions it by a factor of two.
+
+The delay is **peer-local and not hashed**, which is unusual for a timing field and worth
+being clear about. An input carries the tick it applies to and is applied at that tick
+whenever it arrives, so a peer delaying by two and a peer delaying by five produce the same
+input timeline and simulate identically. Only the horizon has to match, because the horizon
+is the length of the per-frame operation sequence (§2.2) and the delay is not.
+
+Which knob to spend is a real choice. The delay costs local responsiveness and nothing else,
+and it removes mispredictions outright. The horizon costs a full extra replayed tick every
+frame, forever, and only lets a misprediction be corrected more cheaply. Reach for the delay
+first, and size the horizon for the jitter tail the delay does not cover.
 
 ---
 

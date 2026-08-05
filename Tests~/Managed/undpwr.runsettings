@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <!--
+      A handful of tests reach Unity methods that are native internal calls and throw
+      "ECall methods must be packaged into a system module" outside the editor. They are
+      not excluded because they are unimportant, they are excluded because this runner
+      physically cannot execute them; run them from Unity's Test Runner. Everything else
+      must stay green here.
+    -->
+    <TestCaseFilter>TestCategory!=RequiresUnityRuntime</TestCaseFilter>
+  </RunConfiguration>
+</RunSettings>

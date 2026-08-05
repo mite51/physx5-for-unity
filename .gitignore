@@ -80,3 +80,10 @@ crashlytics-build.properties
 
 # mono crash report
 *.blob
+
+# Standalone managed test harness. Unity ignores any folder ending in '~', so the project
+# files live outside the asset pipeline and are tracked deliberately despite the *.csproj
+# rule above. Their build output is not.
+!/Tests~/**/*.csproj
+/Tests~/**/[Bb]in/
+/Tests~/**/[Oo]bj/

@@ -198,9 +198,16 @@ value is used locally, so the sender runs on the same value the receivers will:
 ```csharp
 uint buttons = ReadButtons();
 Vector2 wasd = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
-SimInput input = SimInputEncoder.BuildInput(myPlayerId, tick, buttons, wasd, myCameraFrame);
+SimInput input = SimInputEncoder.BuildInput(
+    myPlayerId, engine.LocalInputTick, buttons, wasd, myCameraFrame);
 engine.SubmitInput(input);
 ```
+
+`LocalInputTick` is `CurrentTick` plus `SimConfig.LocalInputDelay`, and stamping against it
+is what keeps remote players from snapping. An input that arrives before the tick it is
+stamped for is never predicted by anyone, so there is nothing to correct when it lands. The
+delay is peer-local and unhashed — see the latency section in the [package
+README](../README.md).
 
 The camera orientation never enters the payload — only the resolved, quantized world direction
 does — so two peers with wildly different camera angles still simulate identically. Movement
@@ -246,7 +253,8 @@ var binder = new SimPresentationBinder(world, host.Registry);
 binder.Rebuild();
 
 // once per fixed update:
-engine.SubmitInput(SimInputEncoder.BuildInput(myId, engine.CurrentTick, buttons, wasd, cameraFrame));
+engine.SubmitInput(SimInputEncoder.BuildInput(
+    myId, engine.LocalInputTick, buttons, wasd, cameraFrame));
 engine.Advance();
 binder.Sample();
 

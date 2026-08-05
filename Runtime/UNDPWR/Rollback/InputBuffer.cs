@@ -27,6 +27,7 @@ namespace UNDPWR.Rollback
         private readonly int[] _lastKnownTick;
 
         private int _newestTick = -1;
+        private int _predictedThrough = -1;
 
         /// <summary>How many ticks the buffer retains.</summary>
         public int Capacity { get { return _frames.Length; } }
@@ -104,11 +105,13 @@ namespace UNDPWR.Rollback
         /// Records a received input.
         /// </summary>
         /// <returns>
-        /// The earliest tick a misprediction touched, or -1 when the prediction already
-        /// matched or the tick is too old to matter. This is advisory: the shipped
-        /// <see cref="RollbackEngine"/> rewinds on a fixed schedule and ignores it, so
-        /// that its operation sequence does not depend on network timing. It is returned
-        /// for diagnostics and for a caller that wants to drive conditional rollback.
+        /// The tick a misprediction touched, or -1 when nothing needs correcting — because
+        /// the guess already matched, because the tick is too old to matter, or because the
+        /// tick has not been simulated yet and so was never guessed at. This is advisory:
+        /// the shipped <see cref="RollbackEngine"/> rewinds on a fixed schedule and ignores
+        /// it, so that its operation sequence does not depend on network timing. It is
+        /// returned for diagnostics and for a caller that wants to drive conditional
+        /// rollback.
         /// </returns>
         public int Submit(SimInput input)
         {
@@ -152,6 +155,18 @@ namespace UNDPWR.Rollback
 
             RecomputeConfirmedFrontier();
 
+            // An empty slot and a slot holding a guess look the same -- EnsureFrame marks a
+            // recycled frame predicted -- so "was this tick ever handed to a step?" has to be
+            // asked separately. It is the whole question here: a tick nobody simulated has
+            // nothing to correct, however far the arriving command is from the neutral value
+            // sitting in the slot. Local input stamped ahead by SimConfig.LocalInputDelay
+            // lands this way every single tick, and reporting those as mispredictions would
+            // hand a conditional-rollback caller a rewind on every frame.
+            if (input.Tick > _predictedThrough)
+            {
+                return -1;
+            }
+
             // A prediction that turned out to be right costs nothing, which is the normal
             // case: players hold inputs steady for many ticks at a time.
             if (!existing.IsPredicted || existing.SameCommandAs(input))
@@ -182,6 +197,12 @@ namespace UNDPWR.Rollback
 
             EnsureFrame(tick);
             SimInputFrame frame = _frames[Index(tick)];
+
+            // Serving a frame is the moment a tick becomes one that can be mispredicted.
+            if (tick > _predictedThrough)
+            {
+                _predictedThrough = tick;
+            }
 
             for (int slot = 0; slot < _playerIds.Length; ++slot)
             {
@@ -229,6 +250,7 @@ namespace UNDPWR.Rollback
             }
 
             _newestTick = resumeTick - 1;
+            _predictedThrough = resumeTick - 1;
             ConfirmedThrough = resumeTick - 1;
             SimLog.Info(string.Format("Input buffer reset; resuming at tick {0}", resumeTick));
         }

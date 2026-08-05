@@ -140,8 +140,9 @@ namespace UNDPWR.Core
             sleepResult.ThrowIfFailed("PxwWorldSetSleepParams");
 
             SimLog.Info(string.Format(
-                "World created: {0} Hz, horizon {1} ticks, {2} backend, sleep after {3} ticks",
-                _config.TickRate, _config.PredictionHorizon, _config.Backend,
+                "World created: {0} Hz, horizon {1} ticks, local input delay {2} ticks, {3} backend, " +
+                "sleep after {4} ticks",
+                _config.TickRate, _config.PredictionHorizon, _config.LocalInputDelay, _config.Backend,
                 _config.SleepTicks == 0 ? "never" : _config.SleepTicks.ToString()));
         }
 

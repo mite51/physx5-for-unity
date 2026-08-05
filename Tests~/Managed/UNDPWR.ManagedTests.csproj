@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Runs the UNDPWR EditMode tests without opening Unity.
+
+    Everything under Runtime/UNDPWR is ordinary managed C#; the only Unity surface it
+    touches is UnityEngine.CoreModule, and only for Vector3, Quaternion, Mathf and
+    [Tooltip]. So the whole tree compiles and runs on the .NET SDK, given a path to a
+    Unity installation's managed assemblies.
+
+    Do not run this by hand. run-tests.ps1 locates Unity and passes UnityManagedDir; this
+    project deliberately fails rather than guessing at it.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>UNDPWR.ManagedTests</AssemblyName>
+    <RootNamespace>UNDPWR.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      CS1574: the framework's XML docs reference types across the whole package, and cref
+      resolution is not what this project exists to check.
+    -->
+    <NoWarn>$(NoWarn);CS1574;CS1591</NoWarn>
+
+    <RunSettingsFilePath>$(MSBuildProjectDirectory)\undpwr.runsettings</RunSettingsFilePath>
+    <UndpwrRoot>$(MSBuildProjectDirectory)\..\..\Runtime\UNDPWR</UndpwrRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+  <!--
+    The whole package, tests included, rather than a hand-picked subset. A subset drifts
+    silently the moment a file gains a dependency, and compiling everything is what proves
+    the managed layer has no hidden editor coupling.
+  -->
+  <ItemGroup>
+    <Compile Include="$(UndpwrRoot)\**\*.cs" Link="UNDPWR\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="UndpwrResolveUnityReferences" BeforeTargets="BeforeResolveReferences">
+    <Error Condition="'$(UnityManagedDir)' == ''"
+           Text="UnityManagedDir is not set. Run Tests~/Managed/run-tests.ps1, which finds it, or pass -p:UnityManagedDir=&quot;...\Editor\Data\Managed\UnityEngine&quot;." />
+    <Error Condition="!Exists('$(UnityManagedDir)\UnityEngine.CoreModule.dll')"
+           Text="No UnityEngine.CoreModule.dll under UnityManagedDir '$(UnityManagedDir)'. Expected a Unity installation's Editor\Data\Managed\UnityEngine directory." />
+
+    <ItemGroup>
+      <Reference Include="UnityEngine.CoreModule">
+        <HintPath>$(UnityManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+        <Private>true</Private>
+      </Reference>
+      <Reference Include="UnityEngine" Condition="Exists('$(UnityManagedDir)\UnityEngine.dll')">
+        <HintPath>$(UnityManagedDir)\UnityEngine.dll</HintPath>
+        <Private>true</Private>
+      </Reference>
+      <Reference Include="UnityEngine.SharedInternalsModule" Condition="Exists('$(UnityManagedDir)\UnityEngine.SharedInternalsModule.dll')">
+        <HintPath>$(UnityManagedDir)\UnityEngine.SharedInternalsModule.dll</HintPath>
+        <Private>true</Private>
+      </Reference>
+    </ItemGroup>
+  </Target>
+
+</Project>
