@@ -1,4 +1,5 @@
 using System;
+using UnityEngine;
 using PhysX5ForUnity;
 using UNDPWR.Core;
 using UNDPWR.Interop;
@@ -35,6 +36,44 @@ namespace UNDPWR.Unity
     /// </remarks>
     public static class SimActorBridge
     {
+        /// <summary>
+        /// Builds a <see cref="PhysxScene"/> that points at a
+        /// <see cref="DeterministicWorld"/>'s native scene, for handing to
+        /// <see cref="PhysxActor.Scene"/> when the actor is created under external membership.
+        /// </summary>
+        /// <remarks>
+        /// A <see cref="PhysxVehicle"/> and a <see cref="PhysxDynamicRigidActor"/> create their
+        /// native object against <c>Scene.NativeObjectPtr</c>, so a component built into a
+        /// deterministic world needs a <see cref="PhysxScene"/> whose handle is the world's, not
+        /// a second scene of its own. This returns exactly that: a lightweight
+        /// <see cref="PhysxScene"/> instance whose <see cref="PhysxScene.NativeObjectPtr"/> is
+        /// the world's scene.
+        /// <para>
+        /// The returned scene is a view, not an owner. Assign it together with
+        /// <see cref="PhysxActor.externalSceneMembership"/> set to <c>true</c>, so the component
+        /// never routes through the scene's reference count and so can never release the world's
+        /// scene. The world owns the scene's lifetime; disposing the world frees it.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException">The world was null.</exception>
+        /// <exception cref="InvalidOperationException">The world has no native scene.</exception>
+        public static PhysxScene CreateWorldScene(DeterministicWorld world)
+        {
+            if (world == null)
+            {
+                throw new ArgumentNullException("world");
+            }
+            IntPtr scenePtr = world.ScenePtr;
+            if (scenePtr == IntPtr.Zero)
+            {
+                throw new InvalidOperationException(
+                    "The world has no native scene; create the DeterministicWorld before binding a PhysxScene to it.");
+            }
+            PhysxScene scene = ScriptableObject.CreateInstance<PhysxScene>();
+            scene.NativeObjectPtr = scenePtr;
+            return scene;
+        }
+
         /// <summary>
         /// Maps a Unity PhysX actor component to the native handle and kind the registry
         /// wants, without registering it.

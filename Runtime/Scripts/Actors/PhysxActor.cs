@@ -18,6 +18,13 @@ namespace PhysX5ForUnity
             set { m_scene = value; }
         }
 
+        [Tooltip("When set, an external owner (for example UNDPWR's DeterministicWorld) manages this " +
+                 "actor's scene membership and insertion order. The component still creates its native " +
+                 "object against Scene, but it does not add or remove itself from the scene; the owner " +
+                 "does that in a deterministic, stable-ID order. Set this (and assign Scene to the world's " +
+                 "bound scene) before the GameObject is activated.")]
+        public bool externalSceneMembership = false;
+
         public virtual void Recreate()
         {
             Physx.StepPhysicsFetchResults(); // in case the simulation is running
@@ -64,7 +71,10 @@ namespace PhysX5ForUnity
 
         void AddToScene()
         {
-            if (m_scene)
+            // Under external membership the owner holds the scene; routing through the
+            // PhysxScene refcount here would (a) risk creating a second scene and (b) let a
+            // later RemoveActor release the owner's shared scene out from under it.
+            if (m_scene && !externalSceneMembership)
             {
                 m_scene.AddActor(this);
             }
@@ -72,7 +82,7 @@ namespace PhysX5ForUnity
 
         void RemoveFromScene()
         {
-            if (m_scene)
+            if (m_scene && !externalSceneMembership)
             {
                 m_scene.RemoveActor(this);
             }

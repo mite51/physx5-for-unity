@@ -179,12 +179,13 @@ namespace PhysX5ForUnity
         protected override void EnableActor()
         {
             if (m_nativeObjectPtr == IntPtr.Zero) CreateActor();
-            if (m_finalized) Physx.AddVehicleToScene(m_nativeObjectPtr);
+            // Under external membership the owner adds and steps the vehicle in stable-ID order.
+            if (!externalSceneMembership && m_finalized) Physx.AddVehicleToScene(m_nativeObjectPtr);
         }
 
         protected override void DisableActor()
         {
-            if (m_nativeObjectPtr != IntPtr.Zero && m_finalized)
+            if (!externalSceneMembership && m_nativeObjectPtr != IntPtr.Zero && m_finalized)
                 Physx.RemoveVehicleFromScene(m_nativeObjectPtr);
         }
 

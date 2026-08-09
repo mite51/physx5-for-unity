@@ -22,12 +22,13 @@ namespace PhysX5ForUnity
         {
             // some hack for reloading assembly
             if (m_nativeObjectPtr == IntPtr.Zero) CreateActor();
-            Physx.AddActorToScene(m_scene.NativeObjectPtr, m_nativeObjectPtr);
+            // Under external membership the owner adds the actor to its scene in stable-ID order.
+            if (!externalSceneMembership) Physx.AddActorToScene(m_scene.NativeObjectPtr, m_nativeObjectPtr);
         }
 
         protected override void DisableActor()
         {
-            if (m_nativeObjectPtr != IntPtr.Zero) Physx.RemoveActorFromScene(m_scene.NativeObjectPtr, m_nativeObjectPtr);
+            if (!externalSceneMembership && m_nativeObjectPtr != IntPtr.Zero) Physx.RemoveActorFromScene(m_scene.NativeObjectPtr, m_nativeObjectPtr);
         }
 
         protected PhysxGeometry m_geometry;

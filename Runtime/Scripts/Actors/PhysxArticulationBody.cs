@@ -192,7 +192,13 @@ namespace PhysX5ForUnity
             // Only the root should release the articulation
             if (IsRoot && m_articulation != IntPtr.Zero && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
             {
-                Physx.RemoveArticulationRootFromScene(Scene.NativeObjectPtr,m_articulation);
+                // Under external membership the owner removes the articulation from its scene.
+                // Releasing it here still auto-removes it from the scene, so the owner must
+                // have released the actors before it disposes the shared scene.
+                if (!externalSceneMembership)
+                {
+                    Physx.RemoveArticulationRootFromScene(Scene.NativeObjectPtr,m_articulation);
+                }
                 Physx.ReleaseArticulation(m_articulation);
                 m_articulation = IntPtr.Zero;
             }
@@ -331,8 +337,9 @@ namespace PhysX5ForUnity
                 }
                 */
 
-                // Add the articulation to the scene
-                if(Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
+                // Add the articulation to the scene. Under external membership the owner
+                // (e.g. UNDPWR's DeterministicWorld) adds it in stable-ID order instead.
+                if(!externalSceneMembership && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
                 {
                     Physx.AddArticulationRootToScene(Scene.NativeObjectPtr, m_articulation);                
                 }
@@ -488,7 +495,12 @@ namespace PhysX5ForUnity
             // Only the root should release the articulation
             if (IsRoot && m_articulation != IntPtr.Zero)
             {
-                Physx.RemoveArticulationFromScene(m_articulation);
+                // Under external membership the owner manages scene removal; release still
+                // auto-removes the articulation from the scene it is in.
+                if (!externalSceneMembership)
+                {
+                    Physx.RemoveArticulationFromScene(m_articulation);
+                }
                 Physx.ReleaseArticulation(m_articulation);
                 m_articulation = IntPtr.Zero;
             }
