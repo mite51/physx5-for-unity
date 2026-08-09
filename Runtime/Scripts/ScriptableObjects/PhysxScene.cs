@@ -16,6 +16,15 @@ namespace PhysX5ForUnity
             get { return m_useGpu; }
         }
 
+        /// <summary>
+        /// Whether this scene reports contacts, making
+        /// <see cref="Physx.GetArticulationContactFlags"/> usable for its articulations.
+        /// </summary>
+        public bool EnableContactEvents
+        {
+            get { return m_enableContactEvents; }
+        }
+
         public void AddActor(PhysxActor actor)
         {
             if (m_dependencyCount == 0) CreateScene();
@@ -44,7 +53,10 @@ namespace PhysX5ForUnity
         {
             if (m_nativeObjectPtr == IntPtr.Zero)
             {
-                m_nativeObjectPtr = Physx.CreateScene(m_gravity, m_pruningStructureType, m_solverType, m_useGpu);
+                PxSceneCreateFlags flags = m_enableContactEvents
+                    ? PxSceneCreateFlags.EnableContactEvents
+                    : PxSceneCreateFlags.None;
+                m_nativeObjectPtr = Physx.CreateSceneWithFlags(m_gravity, m_pruningStructureType, m_solverType, m_useGpu, flags);
             }
         }
 
@@ -64,6 +76,10 @@ namespace PhysX5ForUnity
         private PxSolverType m_solverType = PxSolverType.TGS;
         [SerializeField]
         private bool m_useGpu = true;
+        [SerializeField]
+        [Tooltip("Report contacts so per-link contact flags can be read back. Adds only " +
+                 "notification flags, so the scene simulates identically either way.")]
+        private bool m_enableContactEvents = false;
 
         private int m_dependencyCount = 0;
     }

@@ -269,6 +269,16 @@ namespace PhysX5ForUnity
             return m_jointIndex;
         }
 
+        /// <summary>
+        /// This link's low-level index within the articulation, which is what the
+        /// articulation cache and per-link contact flags are indexed by. Same value as
+        /// <see cref="GetJointIndex"/>, named for what it actually is. The root is always 0.
+        /// </summary>
+        public uint LinkIndex
+        {
+            get { return m_jointIndex; }
+        }
+
         public uint GetJointInboundDof()
         {
             return m_jointInboundDof;
@@ -660,6 +670,22 @@ namespace PhysX5ForUnity
         public IntPtr GetArticulation()
         {
             return m_articulation;
+        }
+
+        /// <summary>
+        /// Read per-link contact flags accumulated since the last
+        /// <see cref="Physx.ClearArticulationContactFlags"/> call, one byte per link indexed
+        /// by <see cref="LinkIndex"/>. Requires the scene to have been created with
+        /// <see cref="PxSceneCreateFlags.EnableContactEvents"/>; without it the buffer is
+        /// simply zeroed. Returns the number of links written.
+        /// </summary>
+        public uint ReadContactFlags(byte[] destFlags)
+        {
+            if (m_articulation == IntPtr.Zero || destFlags == null || destFlags.Length == 0)
+            {
+                return 0;
+            }
+            return Physx.GetArticulationContactFlags(m_articulation, destFlags, (uint)destFlags.Length);
         }
 
         public void WakeUp()

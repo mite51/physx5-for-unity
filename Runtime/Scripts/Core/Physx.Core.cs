@@ -32,6 +32,23 @@ namespace PhysX5ForUnity
         eSLERP = 5
     }
 
+    /// <summary>
+    /// Optional scene capabilities, ORed onto the defaults by
+    /// <see cref="Physx.CreateSceneWithFlags"/>. Mirrors the subset of the native
+    /// PxwSceneFlag bitmask that managed code needs; the numeric values must match.
+    /// </summary>
+    [Flags]
+    public enum PxSceneCreateFlags : uint
+    {
+        None = 0,
+
+        /// <summary>
+        /// Report contacts so <see cref="Physx.GetArticulationContactFlags"/> returns data.
+        /// Only adds notification flags, so a scene simulates identically with it on.
+        /// </summary>
+        EnableContactEvents = 1u << 7
+    }
+
     public partial class Physx
     {
 #if UNITY_EDITOR_LINUX
@@ -67,6 +84,13 @@ namespace PhysX5ForUnity
         /// </summary>
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreateScene(in Vector3 gravity, PxPruningStructureType pruningStructureType, PxSolverType solverType, bool useGpu);
+
+        /// <summary>
+        /// Create a PhysX scene with extra capabilities enabled. Passing
+        /// <see cref="PxSceneCreateFlags.None"/> is identical to <see cref="CreateScene"/>.
+        /// </summary>
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateSceneWithFlags(in Vector3 gravity, PxPruningStructureType pruningStructureType, PxSolverType solverType, bool useGpu, PxSceneCreateFlags extraFlags);
 
         /// <summary>
         /// Step all PhysX scenes for dt
@@ -393,6 +417,26 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern uint GetArticulationDofs(IntPtr articulation);
+
+        // Per-link contact reporting. Requires the scene to have been created with
+        // PxSceneCreateFlags.EnableContactEvents.
+
+        /// <summary>
+        /// Begin a new contact accumulation window. Flags reported by
+        /// <see cref="GetArticulationContactFlags"/> are the OR over every simulation step
+        /// since this was last called, so a control loop that substeps physics calls this
+        /// once per decision rather than once per substep.
+        /// </summary>
+        [DllImport(PHYSX_DLL)]
+        public static extern void ClearArticulationContactFlags();
+
+        /// <summary>
+        /// Write one byte per link (0 or 1) into <paramref name="destFlags"/>, indexed by
+        /// link index, zeroing the remainder. Returns the number of links written, or 0 if
+        /// the articulation has reported no contact at all.
+        /// </summary>
+        [DllImport(PHYSX_DLL)]
+        public static extern uint GetArticulationContactFlags(IntPtr articulation, byte[] destFlags, uint capacity);
 
         // Articulation Link Management
         [DllImport(PHYSX_DLL)]
