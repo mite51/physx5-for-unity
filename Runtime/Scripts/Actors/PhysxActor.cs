@@ -10,7 +10,30 @@ namespace PhysX5ForUnity
     public abstract class PhysxActor : PhysxNativeGameObjectBase
     {
         public delegate void OnBeforeDestroyEventHandeler();
+
+        /// <summary>
+        /// Raised immediately before this actor's native object is released, while the handle is
+        /// still valid. An external owner that holds the handle — UNDPWR's
+        /// <c>DeterministicWorld</c>, which also holds an articulation cache created from it —
+        /// must let go of it here, because Unity does not define the order in which it destroys
+        /// objects and the owner's own teardown may not have run yet.
+        /// </summary>
+        /// <remarks>
+        /// May be raised more than once for the same actor, since a component can be disabled and
+        /// then destroyed. Handlers must be idempotent.
+        /// </remarks>
         public event OnBeforeDestroyEventHandeler OnBeforeDestroy;
+
+        /// <summary>
+        /// Raises <see cref="OnBeforeDestroy"/>. Every path that releases the native object must
+        /// call this first, including the ones that do not run through
+        /// <see cref="DestroyActor"/>.
+        /// </summary>
+        protected void RaiseOnBeforeDestroy()
+        {
+            OnBeforeDestroy?.Invoke();
+        }
+
         
         public PhysxScene Scene
         {
@@ -96,7 +119,7 @@ namespace PhysX5ForUnity
 
         protected virtual void DestroyActor()
         {
-            OnBeforeDestroy?.Invoke();
+            RaiseOnBeforeDestroy();
             DestroyNativeObject();
             RemoveFromScene();
         }

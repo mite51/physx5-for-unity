@@ -192,6 +192,11 @@ namespace PhysX5ForUnity
             // Only the root should release the articulation
             if (IsRoot && m_articulation != IntPtr.Zero && Scene != null && Scene.NativeObjectPtr != IntPtr.Zero)
             {
+                // This release does not run through DestroyActor, so the notification has to be
+                // raised here as well: an external owner holds this articulation's pointer, and a
+                // cache created from it, and can only give either up while it is still alive.
+                RaiseOnBeforeDestroy();
+
                 // Under external membership the owner removes the articulation from its scene.
                 // Releasing it here still auto-removes it from the scene, so the owner must
                 // have released the actors before it disposes the shared scene.
