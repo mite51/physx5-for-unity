@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using UNDPWR.Core;
+using UNDPWR.Interop;
 using UNDPWR.Rollback;
 
 namespace UNDPWR.Tests
@@ -128,6 +129,43 @@ namespace UNDPWR.Tests
 
             config.Solver = SimSolverType.TemporalGaussSeidel;
             Assert.AreEqual(1, config.ToSceneDesc().SolverType);
+        }
+
+        [Test]
+        public void SceneFlagsMatchTheNativeHeader()
+        {
+            // Hand-transcribed from pxw::PxwSceneFlag in DataInterop.h. Every one of these is a
+            // raw bit the native side switches on, so a member declared in the wrong position
+            // builds a scene nobody asked for, in silence: it compiles, and both peers compute
+            // the same wrong number so no config hash check catches it either. This shipped once
+            // with EnhancedDeterminism at bit 0, which meant no session ever actually enabled
+            // enhanced determinism and every session enabled CCD instead.
+            Assert.AreEqual(1u << 0, (uint)SimSceneFlags.EnablePcm);
+            Assert.AreEqual(1u << 1, (uint)SimSceneFlags.EnableCcd);
+            Assert.AreEqual(1u << 2, (uint)SimSceneFlags.EnableStabilization);
+            Assert.AreEqual(1u << 3, (uint)SimSceneFlags.EnableActiveActors);
+            Assert.AreEqual(1u << 4, (uint)SimSceneFlags.EnhancedDeterminism);
+            Assert.AreEqual(1u << 5, (uint)SimSceneFlags.EnableDirectGpuApi);
+            Assert.AreEqual(1u << 6, (uint)SimSceneFlags.DisablePvd);
+            Assert.AreEqual(1u << 7, (uint)SimSceneFlags.EnableContactEvents);
+        }
+
+        [Test]
+        public void DeterministicPresetAsksForEnhancedDeterminismAndNotCcd()
+        {
+            // Enhanced determinism is what makes a result independent of the order PhysX
+            // happens to visit actors and islands in, which is the whole basis of two peers
+            // agreeing. Asserted on the descriptor rather than the enum so that a future
+            // reshuffle of either side is caught by the flags a session actually sends.
+            uint flags = SimConfig.Deterministic.ToSceneDesc().Flags;
+
+            Assert.AreNotEqual(0u, flags & (uint)SimSceneFlags.EnhancedDeterminism,
+                "every UNDPWR preset must enable enhanced determinism");
+            Assert.AreNotEqual(0u, flags & (uint)SimSceneFlags.EnablePcm);
+            Assert.AreNotEqual(0u, flags & (uint)SimSceneFlags.DisablePvd);
+            Assert.AreEqual(0u, flags & (uint)SimSceneFlags.EnableCcd,
+                "CCD varies contact generation with velocity history, which a restore cannot carry");
+            Assert.AreEqual(0u, flags & (uint)SimSceneFlags.EnableStabilization);
         }
 
         [Test]
@@ -270,6 +308,105 @@ namespace UNDPWR.Tests
             Assert.AreEqual(0u, predicted[buffer.SlotOf(2)].Buttons, "the guess repeats the last command");
 
             Assert.AreEqual(4, buffer.Submit(Command(2, 4, 0xFF)), "the guess was wrong at tick 4");
+        }
+
+        // ------------------------------------------------- local stream contiguity ----
+        //
+        // The buffer's own rule -- the frontier stops at the first tick that is not complete --
+        // means a hole in one player's stream is not a hiccup but a permanent stall. These pin
+        // the two ways stamping against RollbackEngine.LocalInputTick opens one, and the rule
+        // SimSession.SubmitLocalInput follows to close them. They model the stamping pattern
+        // rather than driving an engine, so they stay native-free like the rest of the suite.
+
+        /// <summary>Submits one tick for the remote player, so only the local stream is at issue.</summary>
+        private static void SubmitRemote(InputBuffer buffer, int tick)
+        {
+            buffer.Submit(Command(2, tick, 0));
+        }
+
+        [Test]
+        public void FrontierNeverLeavesTheStartWhenTheDelayHoleIsNotFilled()
+        {
+            // Trap one: local input stamped LocalInputDelay ahead means nothing ever covers the
+            // delay ticks the session starts at. Every later tick arriving changes nothing,
+            // which is what makes this so hard to read in a log -- input is clearly flowing and
+            // the frontier has still never moved.
+            const int delay = 2;
+            var buffer = new InputBuffer(new uint[] { 1, 2 }, 32);
+
+            for (int clock = 0; clock <= 20; ++clock)
+            {
+                buffer.Submit(Command(1, clock + delay, 0));
+                SubmitRemote(buffer, clock);
+            }
+
+            Assert.AreEqual(-1, buffer.ConfirmedThrough,
+                "ticks 0 and 1 were never stamped by player 1, so nothing can ever confirm");
+        }
+
+        [Test]
+        public void FrontierStopsWhereTheClockJumpedAndNothingFilledTheGap()
+        {
+            // Trap two: the clock does not always move one tick per frame. A fixed-horizon
+            // engine's first Advance moves it from the confirmed tick to the end of the
+            // prediction window in one go, so the tick to stamp jumps with it. Here the front
+            // hole is primed correctly and the stream still breaks, at the jump instead.
+            const int delay = 2;
+            const int horizon = 6;
+            var buffer = new InputBuffer(new uint[] { 1, 2 }, 32);
+
+            for (int tick = 0; tick < delay; ++tick)
+            {
+                buffer.Submit(Command(1, tick, 0));
+                SubmitRemote(buffer, tick);
+            }
+
+            // Frame one stamps for the clock at rest, then the clock jumps a whole horizon.
+            buffer.Submit(Command(1, 0 + delay, 0));
+            SubmitRemote(buffer, delay);
+            Assert.AreEqual(delay, buffer.ConfirmedThrough, "contiguous so far");
+
+            for (int clock = horizon; clock <= horizon + 10; ++clock)
+            {
+                buffer.Submit(Command(1, clock + delay, 0));
+                SubmitRemote(buffer, clock);
+            }
+
+            Assert.AreEqual(delay, buffer.ConfirmedThrough,
+                "ticks 3 to 7 were skipped by the jump, and the frontier cannot cross them");
+        }
+
+        [Test]
+        public void FillingEveryTickUpToTheStampKeepsTheFrontierMoving()
+        {
+            // The rule SimSession.SubmitLocalInput applies: copy the current sample across every
+            // tick from the last one submitted through the one being stamped. It closes both
+            // traps above with the same line of code, because both are the same thing -- a tick
+            // the local player never spoke for.
+            const int delay = 2;
+            const int horizon = 6;
+            var buffer = new InputBuffer(new uint[] { 1, 2 }, 32);
+
+            int nextLocal = 0;
+            int highestClock = -1;
+
+            // The same clock the test above uses: at rest, then a horizon-wide jump, then one
+            // tick per frame.
+            int[] clocks = { 0, horizon, horizon + 1, horizon + 2, horizon + 3, horizon + 4 };
+            foreach (int clock in clocks)
+            {
+                for (; nextLocal <= clock + delay; ++nextLocal)
+                {
+                    buffer.Submit(Command(1, nextLocal, 0));
+                }
+                for (; highestClock < clock; ++highestClock)
+                {
+                    SubmitRemote(buffer, highestClock + 1);
+                }
+            }
+
+            Assert.AreEqual(horizon + 4, buffer.ConfirmedThrough,
+                "every tick through the newest one both players covered is confirmable");
         }
     }
 }

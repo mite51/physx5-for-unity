@@ -343,6 +343,24 @@ namespace UNDPWR.Core
         /// <summary>Suppresses the PhysX Visual Debugger connection.</summary>
         public bool DisablePvd = true;
 
+        /// <summary>
+        /// Records a per-entity hash alongside every confirmed snapshot, so a desync can name
+        /// the body rather than only the tick.
+        /// </summary>
+        /// <remarks>
+        /// Diagnostic, and excluded from <see cref="ComputeHash"/> for the same reason
+        /// <see cref="DisablePvd"/> is: it changes what is observed, never what is simulated,
+        /// and one peer investigating a desync must not be rejected by the others.
+        /// <para>
+        /// Off by default because it costs a native walk over every entry on each confirmed
+        /// tick. Turn it on when a physics-channel desync needs attributing: every peer that
+        /// has it on logs its own table for the disagreeing tick, and the entry whose hash
+        /// differs between two such logs is the body that diverged.
+        /// </para>
+        /// </remarks>
+        [Tooltip("Record per-entity hashes each confirmed tick so a desync can name the body. Diagnostic; not hashed.")]
+        public bool PerEntityHashDiagnostics = false;
+
         // ------------------------------------------------------------ derived ----
 
         /// <summary>Seconds per tick, the fixed timestep handed to PhysX.</summary>

@@ -94,6 +94,17 @@ namespace UNDPWR.Rollback
             ConfirmedThrough = -1;
         }
 
+        /// <summary>
+        /// Copies the sorted player-ID set this buffer tracks, for a rebuild that needs to
+        /// compare or reuse the current roster.
+        /// </summary>
+        public uint[] CopyPlayerIds()
+        {
+            uint[] copy = new uint[_playerIds.Length];
+            Array.Copy(_playerIds, copy, _playerIds.Length);
+            return copy;
+        }
+
         /// <summary>The slot a player occupies, or -1 when the player is not in the session.</summary>
         public int SlotOf(uint playerId)
         {

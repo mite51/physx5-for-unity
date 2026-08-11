@@ -117,36 +117,53 @@ namespace UNDPWR.Interop
     /// <summary>
     /// Scene creation flags. Mirrors <c>pxw::PxwSceneFlag</c>.
     /// </summary>
+    /// <remarks>
+    /// These values are a wire format: the native side switches on the raw bits, so a member
+    /// declared in the wrong position does not fail to compile, does not fail a config hash
+    /// check — both peers compute the same wrong number — and does not throw. It silently
+    /// builds a different scene than the one asked for. Keep the declaration order identical
+    /// to <c>PxwSceneFlag</c> in <c>DataInterop.h</c>, and see
+    /// <c>SimTimingTests.SceneFlagsMatchTheNativeHeader</c>, which pins every value.
+    /// </remarks>
     [Flags]
     public enum SimSceneFlags : uint
     {
         /// <summary>No flags.</summary>
         None = 0,
 
+        /// <summary>Persistent contact manifolds. On by default.</summary>
+        EnablePcm = 1 << 0,
+
+        /// <summary>Continuous collision detection.</summary>
+        EnableCcd = 1 << 1,
+
+        /// <summary>Stabilization pass for resting stacks.</summary>
+        EnableStabilization = 1 << 2,
+
+        /// <summary>Active-actor reporting, used to skip untouched presentation updates.</summary>
+        EnableActiveActors = 1 << 3,
+
         /// <summary>
         /// <c>PxSceneFlag::eENABLE_ENHANCED_DETERMINISM</c>. Makes results independent of
         /// the number of worker threads and of actors that are not interacting. Required
         /// for cross-peer determinism and enabled by every UNDPWR preset.
         /// </summary>
-        EnhancedDeterminism = 1 << 0,
+        EnhancedDeterminism = 1 << 4,
 
-        /// <summary>Persistent contact manifolds. On by default.</summary>
-        EnablePcm = 1 << 1,
-
-        /// <summary>Continuous collision detection.</summary>
-        EnableCcd = 1 << 2,
-
-        /// <summary>Stabilization pass for resting stacks.</summary>
-        EnableStabilization = 1 << 3,
-
-        /// <summary>Active-actor reporting, used to skip untouched presentation updates.</summary>
-        EnableActiveActors = 1 << 4,
+        /// <summary>Direct GPU API. Ignored unless the scene is a GPU scene.</summary>
+        EnableDirectGpuApi = 1 << 5,
 
         /// <summary>
         /// Suppresses the PhysX Visual Debugger connection. Always set for headless test
         /// runs, since a PVD connection perturbs timing.
         /// </summary>
-        DisablePvd = 1 << 5
+        DisablePvd = 1 << 6,
+
+        /// <summary>
+        /// Installs the notification-adding filter shader. The UNDPWR world layer forces this
+        /// on for every world it creates, so managed callers never need to pass it.
+        /// </summary>
+        EnableContactEvents = 1 << 7
     }
 
     /// <summary>

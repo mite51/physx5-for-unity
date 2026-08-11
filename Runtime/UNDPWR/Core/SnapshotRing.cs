@@ -4,6 +4,120 @@ using UNDPWR.Diagnostics;
 namespace UNDPWR.Core
 {
     /// <summary>
+    /// Which of a snapshot's channels two peers disagreed about.
+    /// </summary>
+    [Flags]
+    public enum SimStateChannel
+    {
+        /// <summary>Everything matched.</summary>
+        None = 0,
+
+        /// <summary>The physics state captured natively from PhysX.</summary>
+        Physics = 1,
+
+        /// <summary>Per-entity managed state.</summary>
+        Entity = 2,
+
+        /// <summary>Game-wide managed state: scores, the action queue, the mode.</summary>
+        Game = 4,
+    }
+
+    /// <summary>
+    /// A snapshot's three channel hashes, kept apart so a disagreement can name a channel.
+    /// </summary>
+    /// <remarks>
+    /// Peers compare <see cref="Combined"/>, but carrying the parts costs sixteen more bytes on
+    /// a message sent once per confirmed tick and turns "the simulations diverged" into
+    /// "the game channel diverged", which is the difference between a week of bisecting and
+    /// knowing which file to open. The three are independent, so the one that differs points
+    /// straight at a category of cause: physics at the solver, the rollback path or an actor
+    /// touched outside a step handler; entity at per-entity managed state; game at the mode,
+    /// the score, or the action queue.
+    /// </remarks>
+    public struct SimStateHashes : IEquatable<SimStateHashes>
+    {
+        /// <summary>The physics state's hash, computed natively during capture.</summary>
+        public ulong Physics;
+
+        /// <summary>The entity channel's hash.</summary>
+        public ulong Entity;
+
+        /// <summary>The game channel's hash.</summary>
+        public ulong Game;
+
+        /// <summary>Creates a triple from its channels.</summary>
+        public SimStateHashes(ulong physics, ulong entity, ulong game)
+        {
+            Physics = physics;
+            Entity = entity;
+            Game = game;
+        }
+
+        /// <summary>
+        /// The three folded into the single value peers compare.
+        /// </summary>
+        /// <remarks>
+        /// Folding all three every time, including the empty managed channels, keeps the value
+        /// well-defined for a physics-only world: the two managed hashes are their zero-length
+        /// hash and contribute the same constant on every peer.
+        /// </remarks>
+        public ulong Combined
+        {
+            get
+            {
+                ulong hash = SimHash.OffsetBasis;
+                hash = SimHash.Combine(hash, Physics);
+                hash = SimHash.Combine(hash, Entity);
+                hash = SimHash.Combine(hash, Game);
+                return hash;
+            }
+        }
+
+        /// <summary>Which channels differ between this triple and <paramref name="other"/>.</summary>
+        public SimStateChannel Differences(SimStateHashes other)
+        {
+            SimStateChannel channels = SimStateChannel.None;
+            if (Physics != other.Physics)
+            {
+                channels |= SimStateChannel.Physics;
+            }
+            if (Entity != other.Entity)
+            {
+                channels |= SimStateChannel.Entity;
+            }
+            if (Game != other.Game)
+            {
+                channels |= SimStateChannel.Game;
+            }
+            return channels;
+        }
+
+        /// <summary>Whether every channel matches.</summary>
+        public bool Equals(SimStateHashes other)
+        {
+            return Physics == other.Physics && Entity == other.Entity && Game == other.Game;
+        }
+
+        /// <inheritdoc />
+        public override bool Equals(object obj)
+        {
+            return obj is SimStateHashes && Equals((SimStateHashes)obj);
+        }
+
+        /// <inheritdoc />
+        public override int GetHashCode()
+        {
+            return Combined.GetHashCode();
+        }
+
+        /// <inheritdoc />
+        public override string ToString()
+        {
+            return string.Format("physics {0:X16} entity {1:X16} game {2:X16}", Physics, Entity, Game);
+        }
+    }
+
+    /// <summary>
     /// One tick's captured world state across every channel, plus the hashes and tick
     /// number it belongs to.
     /// </summary>
@@ -63,24 +177,20 @@ namespace UNDPWR.Core
         public bool IsConfirmed { get; internal set; }
 
         /// <summary>
-        /// The three channel hashes folded into one, which is what peers compare to decide
-        /// whether they agree.
+        /// The three channel hashes as one value, for publishing or comparing.
         /// </summary>
-        /// <remarks>
-        /// Folding all three every time, including the empty managed channels, keeps the
-        /// value well-defined for a physics-only world: the two managed hashes are their
-        /// zero-length hash and contribute the same constant on every peer.
-        /// </remarks>
+        public SimStateHashes Hashes
+        {
+            get { return new SimStateHashes(Hash, EntityHash, GameHash); }
+        }
+
+        /// <summary>
+        /// The three channel hashes folded into one, which is what decides whether two peers
+        /// agree.
+        /// </summary>
         public ulong CombinedHash
         {
-            get
-            {
-                ulong hash = SimHash.OffsetBasis;
-                hash = SimHash.Combine(hash, Hash);
-                hash = SimHash.Combine(hash, EntityHash);
-                hash = SimHash.Combine(hash, GameHash);
-                return hash;
-            }
+            get { return Hashes.Combined; }
         }
 
         internal Snapshot(int capacity)

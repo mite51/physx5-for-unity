@@ -277,6 +277,13 @@ stamped for is never predicted by anyone, so there is nothing to correct when it
 delay is peer-local and unhashed — see the latency section in the [package
 README](../README.md).
 
+The snippet above stamps one tick for brevity, which is not enough on its own. Confirmation needs
+an unbroken run from each player, so every tick from the last one submitted through
+`LocalInputTick` has to be covered — a single submit per frame leaves the starting
+`LocalInputDelay` ticks unstamped and skips whatever the clock jumps over on the first `Advance`,
+and either gap stalls the peer permanently. `SimSession.SubmitLocalInput` fills the run for you;
+driving the engine bare, loop it yourself as the [package README](../README.md) shows.
+
 The camera orientation never enters the payload — only the resolved, quantized world direction
 does — so two peers with wildly different camera angles still simulate identically. Movement
 lands in `AxisX`/`AxisY`; per the aim model, entities aim along their own facing, and
@@ -320,9 +327,15 @@ bob.BindEntity(host.Pool.Spawn("ball", spawnB, Quaternion.identity).StableId);
 var binder = new SimPresentationBinder(world, host.Registry);
 binder.Rebuild();
 
-// once per fixed update:
-engine.SubmitInput(SimInputEncoder.BuildInput(
-    myId, engine.LocalInputTick, buttons, wasd, cameraFrame));
+int nextLocalTick = engine.CurrentTick;
+
+// once per fixed update. Cover every tick through LocalInputTick, not just that one:
+// a gap of a single tick stalls this player's peers permanently.
+for (; nextLocalTick <= engine.LocalInputTick; ++nextLocalTick)
+{
+    engine.SubmitInput(SimInputEncoder.BuildInput(
+        myId, nextLocalTick, buttons, wasd, cameraFrame));
+}
 engine.Advance();
 binder.Sample();
 

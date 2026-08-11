@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
+using UNDPWR.Core;
 using UNDPWR.Diagnostics;
 
 namespace UNDPWR.Net
@@ -12,14 +14,71 @@ namespace UNDPWR.Net
         /// <summary>The confirmed tick the two peers disagree about.</summary>
         public int Tick;
 
-        /// <summary>This peer's combined snapshot hash at that tick.</summary>
-        public ulong LocalHash;
-
-        /// <summary>The other peer's hash at that tick.</summary>
-        public ulong PeerHash;
-
         /// <summary>Which peer reported the differing hash.</summary>
         public uint PeerId;
+
+        /// <summary>This peer's per-channel hashes at that tick.</summary>
+        public SimStateHashes Local;
+
+        /// <summary>The other peer's per-channel hashes at that tick.</summary>
+        public SimStateHashes Peer;
+
+        /// <summary>
+        /// Which channels actually differ, which is the first thing worth knowing.
+        /// </summary>
+        public SimStateChannel Channels;
+
+        /// <summary>This peer's combined snapshot hash at that tick.</summary>
+        public ulong LocalHash { get { return Local.Combined; } }
+
+        /// <summary>The other peer's combined hash at that tick.</summary>
+        public ulong PeerHash { get { return Peer.Combined; } }
+
+        /// <summary>
+        /// A multi-line account naming the diverged channels and showing all three side by
+        /// side, so the log says where to look rather than only that something is wrong.
+        /// </summary>
+        public string Describe()
+        {
+            StringBuilder text = new StringBuilder();
+            text.AppendFormat("Desync at tick {0} against peer {1}. Diverged: {2}.",
+                Tick, PeerId, Channels == SimStateChannel.None ? "nothing" : Channels.ToString());
+
+            AppendChannel(text, "physics", Local.Physics, Peer.Physics);
+            AppendChannel(text, "entity ", Local.Entity, Peer.Entity);
+            AppendChannel(text, "game   ", Local.Game, Peer.Game);
+
+            text.Append(Hint());
+            return text.ToString();
+        }
+
+        private static void AppendChannel(StringBuilder text, string name, ulong local, ulong peer)
+        {
+            text.AppendFormat("\n  {0} local {1:X16} {2} peer {3:X16}",
+                name, local, local == peer ? "==" : "!=", peer);
+        }
+
+        /// <summary>Where the diverged channel points, since the categories barely overlap.</summary>
+        private string Hint()
+        {
+            switch (Channels)
+            {
+                case SimStateChannel.Physics:
+                    return "\n  Physics alone: the solver, the rollback path, or an actor moved outside a step handler. " +
+                        "Managed state agrees, so gameplay logic ran identically.";
+                case SimStateChannel.Entity:
+                    return "\n  Entity channel alone: per-entity managed state. Physics agrees, so this is capture/restore " +
+                        "order or a field mutated outside a step handler, not the simulation.";
+                case SimStateChannel.Game:
+                    return "\n  Game channel alone: the mode, the score, or the action queue. Physics agrees, so the bodies " +
+                        "are in the same places and the disagreement is in game logic reacting to them.";
+                case SimStateChannel.None:
+                    return "\n  No channel differs, so the fold disagrees with its parts -- a framework bug, not a game one.";
+                default:
+                    return "\n  More than one channel: usually one cause that has already propagated. The earliest diverged " +
+                        "tick is the one to look at; this may not be it.";
+            }
+        }
     }
 
     /// <summary>
@@ -46,8 +105,8 @@ namespace UNDPWR.Net
     /// </remarks>
     public sealed class SimDesyncDetector
     {
-        private readonly Dictionary<int, ulong> _localHashes = new Dictionary<int, ulong>();
-        private readonly Dictionary<long, ulong> _peerHashes = new Dictionary<long, ulong>();
+        private readonly Dictionary<int, SimStateHashes> _localHashes = new Dictionary<int, SimStateHashes>();
+        private readonly Dictionary<long, SimStateHashes> _peerHashes = new Dictionary<long, SimStateHashes>();
         private readonly int _window;
         private int _newestLocalTick = -1;
 
@@ -73,7 +132,7 @@ namespace UNDPWR.Net
         /// Records this peer's confirmed hash for a tick and checks it against any peer hashes
         /// already received for it.
         /// </summary>
-        public void RecordLocal(int tick, ulong hash)
+        public void RecordLocal(int tick, SimStateHashes hash)
         {
             if (tick < 0)
             {
@@ -88,11 +147,11 @@ namespace UNDPWR.Net
 
             // A peer hash may already be waiting for this tick from any peer.
             List<long> matched = null;
-            foreach (KeyValuePair<long, ulong> entry in _peerHashes)
+            foreach (KeyValuePair<long, SimStateHashes> entry in _peerHashes)
             {
                 if (TickOfKey(entry.Key) == tick)
                 {
-                    if (entry.Value != hash)
+                    if (!entry.Value.Equals(hash))
                     {
                         Report(tick, hash, entry.Value, PeerOfKey(entry.Key));
                     }
@@ -118,17 +177,17 @@ namespace UNDPWR.Net
         /// Records a peer's confirmed hash for a tick and checks it against ours, if we have
         /// computed that tick.
         /// </summary>
-        public void RecordPeer(uint peerId, int tick, ulong hash)
+        public void RecordPeer(uint peerId, int tick, SimStateHashes hash)
         {
             if (tick < 0)
             {
                 return;
             }
 
-            ulong localHash;
+            SimStateHashes localHash;
             if (_localHashes.TryGetValue(tick, out localHash))
             {
-                if (localHash != hash)
+                if (!localHash.Equals(hash))
                 {
                     Report(tick, localHash, hash, peerId);
                 }
@@ -144,19 +203,18 @@ namespace UNDPWR.Net
             _peerHashes[KeyOf(peerId, tick)] = hash;
         }
 
-        private void Report(int tick, ulong localHash, ulong peerHash, uint peerId)
+        private void Report(int tick, SimStateHashes localHash, SimStateHashes peerHash, uint peerId)
         {
             DesyncCount++;
 
             SimDesyncReport report = new SimDesyncReport();
             report.Tick = tick;
-            report.LocalHash = localHash;
-            report.PeerHash = peerHash;
             report.PeerId = peerId;
+            report.Local = localHash;
+            report.Peer = peerHash;
+            report.Channels = localHash.Differences(peerHash);
 
-            SimLog.Error(string.Format(
-                "Desync at tick {0}: local hash {1:X16}, peer {2} hash {3:X16}",
-                tick, localHash, peerId, peerHash));
+            SimLog.Error(report.Describe());
 
             Action<SimDesyncReport> handler = DesyncDetected;
             if (handler != null)
@@ -243,8 +301,7 @@ namespace UNDPWR.Net
 
         /// <summary>Creates the exception from a report.</summary>
         public SimDesyncException(SimDesyncReport report)
-            : base(string.Format("Desync at tick {0}: local {1:X16} != peer {2} {3:X16}",
-                report.Tick, report.LocalHash, report.PeerId, report.PeerHash))
+            : base(report.Describe())
         {
             Report = report;
         }

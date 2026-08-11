@@ -172,10 +172,22 @@ var engine = new RollbackEngine(world, playerIds);
 engine.AddHandler(new MyGameplay());   // all simulation effects go through here
 engine.Initialise();
 
+int nextLocalTick = engine.CurrentTick;
+
 // once per fixed update
-engine.SubmitInput(SampleLocalInput(engine.LocalInputTick));   // not engine.CurrentTick
+for (; nextLocalTick <= engine.LocalInputTick; ++nextLocalTick)   // not engine.CurrentTick
+{
+    engine.SubmitInput(SampleLocalInput(nextLocalTick));
+}
 engine.Advance();
 ```
+
+Submit a *run* of ticks, not one. Confirmation needs an unbroken stream from each player, and
+one missing tick stalls that player's peers for good rather than briefly — so every tick from
+the last one submitted through `LocalInputTick` has to be covered. Two things open a gap if you
+stamp a single tick per frame: nothing covers the `LocalInputDelay` ticks the session starts at,
+and the first `Advance` jumps the clock a whole horizon, taking the tick to stamp with it.
+`SimSession.SubmitLocalInput` does this for you; the loop is only for driving the engine bare.
 
 Everything that touches the simulation must go through `ISimStepHandler`. A force applied
 outside it happens on the original pass and not on the replay, which desyncs a peer

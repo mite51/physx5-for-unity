@@ -246,12 +246,19 @@ Roll back when something is actually wrong, and only to where it went wrong.
 - **Cold-step discipline kept.** Restore before every step, exactly one restore, never two.
   `RunPredictionConditional` restores once to `replayFrom - 1` and then re-restores before each
   subsequent step, identical to the fixed path — the replay is just shorter.
-- **The one-confirmed-tick-per-frame cap is lifted under the flag.** `Advance` drains the whole
-  confirmed backlog (`_inputs.ConfirmedThrough`) instead of one tick. The cap existed because a
-  confirmed step's predecessor differs between TGS peers whose packets clumped differently;
-  transparency makes the predecessor irrelevant, so under PGS a confirmed tick is a pure function
-  of the confirmed snapshot before it however many drain in one frame. The cap stays for the
-  fixed-horizon (TGS-capable) path.
+- **The one-confirmed-tick-per-frame cap stays.** It was lifted under the flag at first, on the
+  grounds that the cap existed only because a confirmed step's predecessor differs between TGS
+  peers whose packets clumped differently, and transparency makes the predecessor irrelevant — so
+  under PGS a confirmed tick is a pure function of the confirmed snapshot before it however many
+  drain in one frame. That reasoning is still right, and lifting the cap was still wrong: the cap
+  had a second job nobody had written down. Here the clock is the confirmed tick plus the horizon,
+  so confirming *n* ticks in a frame advances the clock by *n*, and the cap is the only thing
+  pacing the simulation against wall time. Local input is stamped `LocalInputDelay` ticks ahead, so
+  a peer whose own input is the last one a tick waits on — a solo host, or anyone during a lull —
+  finds the frontier permanently in the future and drains to it every frame, running the whole
+  simulation `LocalInputDelay` times too fast. Conditional rollback still pays for itself in
+  shorter replays; it does not get to set the rate. Phase 3 states the same rule directly, since
+  there the clock is wall time rather than a function of the frontier.
 - **Desync detection is mandatory with the flag.** The fixed horizon was the safety net;
   conditional rollback removes it, leaving confirmed-tick hash exchange as the only thing between
   a drift and a silent divergence. `SimSession` forces `SimDesyncDetector.Fatal = true` whenever
@@ -293,6 +300,13 @@ burst rather than the average — `SnapshotHistory` bounds it.
 - The prediction window is now variable-width, so it shares `RunPredictionConditional` with
   Phase 2 — the routine takes the window end as a parameter (`_confirmedTick + PredictionHorizon`
   for the fixed horizon, `_currentTick` for the free clock) and is otherwise identical.
+- **Confirmation may not run the clock past wall time.** `AdvanceConfirmed` drags `_currentTick`
+  up to whatever it confirms, so `newConfirmed` is capped at `_currentTick + 1`. Without it a peer
+  whose own input is the last one a tick waits on is pulled to a frontier that is permanently
+  `LocalInputDelay` ticks in the future, and the simulation runs that many times faster than real
+  time — most visibly on a solo host, where it is guaranteed rather than occasional. Confirming
+  settles the past; it is not licence to simulate the future early, and nothing is delayed by
+  saying so, since a tick held back is confirmed on the next call once the clock reaches it.
 
 At that point the local player never waits on a remote packet, remote inputs that beat the
 delay are never predicted at all, and the ones that do not are corrected from the tick they

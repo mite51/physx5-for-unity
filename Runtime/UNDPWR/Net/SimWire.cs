@@ -21,8 +21,32 @@ namespace UNDPWR.Net
         /// <summary>One or more <see cref="SimInput"/>s. The only simulation data on the wire.</summary>
         Input = 2,
 
-        /// <summary>A confirmed tick and its combined snapshot hash, for desync detection.</summary>
+        /// <summary>
+        /// A confirmed tick and its three per-channel snapshot hashes, for desync detection.
+        /// Peers compare the fold; the parts are carried so a mismatch can name the channel.
+        /// </summary>
         Hash = 3,
+
+        /// <summary>
+        /// A full synchronised-rebuild payload: the agreed tick, roster and every snapshot
+        /// channel, for a mid-match join, a leave, or a desync recovery. Carried on a reliable
+        /// path by the game rather than through the best-effort input transport.
+        /// </summary>
+        Rebuild = 4,
+
+        /// <summary>
+        /// Each body's stable ID paired with the PhysX actor index it was given, sent once after
+        /// the first step so peers can verify they built the world in the same order. A mismatch
+        /// is a determinism bug the config and roster handshake cannot see.
+        /// </summary>
+        InternalIds = 5,
+
+        /// <summary>
+        /// One confirmed tick's per-entity hashes, sent only when a physics disagreement is
+        /// detected for that tick, so the peers can name the body that diverged rather than
+        /// only the tick.
+        /// </summary>
+        EntityHashes = 6,
     }
 
     /// <summary>
@@ -114,6 +138,30 @@ namespace UNDPWR.Net
         public void WriteSingle(float value)
         {
             WriteUInt32(SimFloatBits.ToBits(value));
+        }
+
+        /// <summary>
+        /// Writes a length-prefixed byte block: a little-endian 32-bit count followed by that
+        /// many bytes, so the reader can recover the block without knowing its size in advance.
+        /// </summary>
+        public void WriteBytes(byte[] value, int offset, int count)
+        {
+            if (count < 0)
+            {
+                throw new ArgumentOutOfRangeException("count");
+            }
+            WriteInt32(count);
+            if (count == 0)
+            {
+                return;
+            }
+            if (value == null || offset < 0 || offset + count > value.Length)
+            {
+                throw new ArgumentOutOfRangeException("count", "byte block runs past the source buffer");
+            }
+            Ensure(count);
+            Array.Copy(value, offset, _buffer, _length, count);
+            _length += count;
         }
 
         /// <summary>Returns a copy of exactly the bytes written.</summary>
@@ -213,6 +261,27 @@ namespace UNDPWR.Net
         public float ReadSingle()
         {
             return SimFloatBits.FromBits(ReadUInt32());
+        }
+
+        /// <summary>
+        /// Reads a length-prefixed byte block written by <see cref="SimByteWriter.WriteBytes"/>,
+        /// returning a freshly allocated array of exactly the written length.
+        /// </summary>
+        public byte[] ReadBytes()
+        {
+            int count = ReadInt32();
+            if (count < 0)
+            {
+                throw new SimWireFormatException("negative byte-block length");
+            }
+            Require(count);
+            byte[] result = new byte[count];
+            if (count > 0)
+            {
+                Array.Copy(_buffer, _position, result, 0, count);
+                _position += count;
+            }
+            return result;
         }
     }
 

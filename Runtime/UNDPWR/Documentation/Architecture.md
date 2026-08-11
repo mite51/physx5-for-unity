@@ -557,6 +557,19 @@ This value is what gates §6.2 — it is the boundary between "final" and "guess
 A peer stamps its own input for `RollbackEngine.LocalInputTick`, which is `CurrentTick`
 plus `SimConfig.LocalInputDelay`, rather than for the tick it is simulating right now.
 
+Stamping ahead leaves a hole behind it, and the hole is fatal rather than untidy. Nothing ever
+covers the `delay` ticks a session starts at, and §7.3's frontier stops at the first tick that is
+not complete — so it never leaves the start, and the peer stalls for good once the clock reaches
+its bound, with input appearing to do nothing at all. The clock is the second source of holes: it
+does not always move one tick per frame, since the first `Advance` under a fixed horizon jumps it
+from the confirmed tick to the end of the prediction window, and the tick to stamp jumps with it.
+
+`SimSession.SubmitLocalInput` closes both by filling every tick from the last one it submitted
+through the one being stamped, copying the current sample across the gap — which is also the
+value the other peers' prediction already assumed for those ticks, so filling them agrees with
+the guess rather than correcting it. A caller driving `RollbackEngine` directly, with no session,
+has to do the same thing itself.
+
 The point is to arrive ahead of the guess. Work the timing through with all peers' confirmed
 clocks advancing together, which is what §6.3 enforces. Peer Q stamps an input for tick
 `T = c + horizon + delay` while its confirmed tick is `c`. Peer P first *predicts* tick `T`
@@ -668,11 +681,34 @@ the wire (`SimMessageKind`):
   prediction horizon) and the player set, exchanged once at join. A peer whose hash or player
   set differs is *refused* — a PGS/TGS or horizon mismatch is a clean rejection, not a desync
   discovered mid-match.
-- **Hash** — a confirmed tick and its `Snapshot.CombinedHash`. `SimDesyncDetector` compares
-  each peer's hash against its own for the same confirmed tick and raises the first
-  disagreement. It is diagnostic while the fixed horizon is the safety net; `SimSession` forces
-  it mandatory (`SimDesyncDetector.Fatal = true`) whenever `SimConfig.ConditionalRollback`
-  removes that net (§6.5).
+- **Hash** — a confirmed tick and its three channel hashes (`Snapshot.Hashes`).
+  `SimDesyncDetector` compares each peer's against its own for the same confirmed tick and
+  raises the first disagreement. It is diagnostic while the fixed horizon is the safety net;
+  `SimSession` forces it mandatory (`SimDesyncDetector.Fatal = true`) whenever
+  `SimConfig.ConditionalRollback` removes that net (§6.5).
+
+  The channels travel separately rather than only as the fold peers compare, which costs
+  sixteen bytes and is the difference between a report that says the worlds diverged and one
+  that says *which* diverged. The three causes barely overlap, so `SimDesyncReport.Channels`
+  narrows the search before any bisecting starts: physics alone points at the solver, the
+  rollback path, or an actor moved outside a step handler; the entity channel alone points at
+  per-entity managed state, with the bodies provably in the same places; the game channel alone
+  points at the mode, the score or the action queue. `SimDesyncReport.Describe()` prints all
+  three side by side with that reading attached.
+- **InternalIds** — each body's stable ID paired with the PhysX actor index it was given,
+  sent once after the first confirmed step and again after each rebuild. PhysX assigns the actor
+  index from insertion order and the solver visits bodies in that order, so two peers that
+  registered the same entities in a different order round contact impulses differently and drift
+  after the first touch — a determinism bug the config and roster handshake cannot see, because
+  both peers hold the same *set* of bodies, just in a different PhysX order. `SimRegistrationCheck`
+  names the first body whose actor index disagrees. It compares only the actor index, never the
+  island node index, which changes as a body joins or leaves a simulation island (i.e. every time
+  the ball sleeps) and so legitimately differs between peers a few ticks apart.
+- **EntityHashes** — one confirmed tick's per-entity hashes, sent only when a physics disagreement
+  is detected for that tick and only when `SimConfig.PerEntityHashDiagnostics` recorded them.
+  `SimEntityHashDiff` names the entities whose hashes differ, turning "physics diverged" into "this
+  body diverged and every other agrees". Both peers detect the same tick and both send, so each can
+  name the body locally without a request/reply exchange or having to decide which peer is right.
 
 The per-frame loop stays in the caller's hands: `session.Pump()` drains the network into the
 engine, `session.SubmitLocalInput` submits and broadcasts, `engine.Advance()` steps once, and
