@@ -191,8 +191,8 @@ or a stale DLL faults on the first call (§6).
   `CompareInternalIds` (the last names the offending stable ID when peers disagree); sets the
   sleep parameters at world creation, and pushes the configured solver iteration counts onto
   each dynamic body at registration, which nothing did before.
-- `Runtime/UNDPWR/Rollback/RollbackEngine.cs` — `RunPrediction` restores before every step,
-  not just at the start of the run. This is the cold-step discipline.
+- `Runtime/UNDPWR/Rollback/RollbackEngine.cs` — `RunPredictionConditional` restores before
+  every step, not just at the start of the run. This is the cold-step discipline.
 
 Verified: two worlds built in opposite application order produce identical PhysX indices
 and the same id-map hash (`0x377646669C4797C2`), because the wrapper commits in stable-ID
@@ -346,12 +346,12 @@ TGS — 3e-09 m/s on a loose grid, 6.6e-07 m/s on a 16-high stack, on the *first
 step, with pose still bitwise equal. Transparency is the property variable depth rests on,
 so under TGS variable depth cannot work at all, wake counter or no wake counter.
 
-This is the one that has a decision attached to it. `SimConfig.ToSceneDesc` hardcodes TGS,
-chosen for stack and articulation stability. That choice is still defensible — the framework
-does not depend on transparency, because it makes every peer perform an identical operation
-sequence (`Architecture.md` §2) — but it does mean the fixed prediction horizon is not
-merely conservative, it is required. Reconsidering the horizon means first finding out
-whether TGS's substep state can be reset, and that has not been attempted.
+This is the one that had a decision attached to it. The framework once hardcoded TGS, chosen
+for stack and articulation stability, and leaned on making every peer perform an identical
+operation sequence rather than on transparency. That is no longer the design: `SimConfig`
+requires PGS, whose replay *is* transparent under cold steps, and the data-dependent rewind and
+free-running clock rest on that. TGS's substep state still cannot be reset, so TGS is refused
+for a networked session rather than propped up by a fixed horizon.
 
 **Deep contact chains diverge under variable depth even on PGS.** Bisected in §9. The rule
 that came out of it: a contact chain up to 8 bodies deep survives peers rewinding by
@@ -369,28 +369,23 @@ internal arrangement, which a restore into a warmed world could not. What remain
 flow that negotiates the resume tick and agreed snapshot between peers; the local rebuild it
 drives is done. Unrelated to everything above.
 
-### Why the horizon stays (by default)
+### Why the horizon is gone
 
-If TGS transparency and the chain-depth limit both closed, rollback depth would no longer
-need to be synchronised across peers, and the fixed prediction horizon could go — peers would
-rewind by whatever their own latency demanded, which is materially better netcode. TGS is not
-close and the chain-depth limit is understood but not explained. Keep the fixed horizon.
+The fixed prediction horizon existed only because rollback depth had to be synchronised across
+peers, and that was only true without transparent replay. The route to transparency by *leaving*
+TGS closed: PGS plus cold steps is measured transparent (§4 of AdaptiveRollbackPlan.md), so a
+peer can rewind by whatever its own latency demands and still agree on confirmed state. On that
+basis the framework now requires PGS, always runs a free-running clock and conditional rollback,
+and has removed the horizon and its opt-out flags entirely. Confirmed-hash desync detection is
+mandatory and fatal, replacing the safety net the fixed horizon used to provide.
 
-That is why it stays *by default*. The route to transparency by leaving TGS (below) did close,
-so the framework now ships that better netcode as an opt-in: PGS plus cold steps is measured
-transparent (§4 of AdaptiveRollbackPlan.md), and on that basis `SimConfig.ConditionalRollback`
-and `SimConfig.FreeRunningClock` let a PGS session rewind and lead by whatever its own latency
-demands, with confirmed-hash desync detection made mandatory to replace the safety net the
-fixed horizon provided. TGS sessions keep the fixed horizon, which remains the default.
-
-One option that framing skips: the route to transparency does not have to run through fixing
-TGS, because *leaving* TGS also reaches it. PGS plus cold steps is already measured transparent,
-and §3 measured PGS-cold settling a 16-high stack **better** than warm — 1.499999 against
-1.499931, residual velocity 0.000146 m/s against 0.002971 m/s — which undercuts the stack
-stability that TGS was selected for in the first place. Articulations, vehicles and high mass
-ratios are unmeasured on PGS and are the reason this is not simply a one-line change. That
-measurement, and what it unblocks if it comes back clean, is staged in
-[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md).
+The route to transparency did not run through fixing TGS; *leaving* TGS reached it. PGS plus
+cold steps is measured transparent, and §3 measured PGS-cold settling a 16-high stack **better**
+than warm — 1.499999 against 1.499931, residual velocity 0.000146 m/s against 0.002971 m/s —
+which undercuts the stack stability TGS was selected for in the first place. Articulations,
+vehicles and high mass ratios have since been measured on PGS by the native multi-peer harness,
+which is why the switch to required PGS and a horizon-free engine has landed rather than staying
+staged in [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md).
 
 ---
 
@@ -451,9 +446,11 @@ Why depth 9 specifically is not explained at all.
 
 ### What to do about it
 
-Nothing, for now, and the framework is not exposed: it runs a fixed horizon, so every peer
-rewinds the same amount every frame and none of this is reachable. The threshold is asserted
-in `PxwRollbackRepro` so that a PhysX upgrade which moves it gets noticed.
+The framework is exposed to this now that it rewinds a data-dependent depth: a contact chain
+deeper than 8 bodies can desync peers that rewound by different amounts. That is a content
+constraint, measured by the native chain-depth diagnostic each tick rather than left to chance.
+The threshold is also asserted in `PxwRollbackRepro` so that a PhysX upgrade which moves it gets
+noticed.
 
 If it is picked up again, the next step is to instrument the island graph directly —
 `Sc::Interaction` insertion order and the island manager's edge list, per body per tick,
@@ -468,8 +465,8 @@ Most of the original list has since landed: the transport interface and wire mes
 (`ISimTransport`, `SimSession`), articulation and vehicle rollback state (measured in the
 native suite), the multi-peer test harness (`RunMultiPeerTests`), the scene-query and
 contact/trigger native layers, and framework-side sleeping (§7). Adaptive rollback landed too,
-opt-in under PGS: conditional rollback and the free-running clock (AdaptiveRollbackPlan.md
-§5–6).
+and is now the only mode under a required PGS: conditional rollback and the free-running clock
+(AdaptiveRollbackPlan.md §5–6), with the fixed horizon removed.
 
 What remains: the synchronised-rebuild *message flow* that carries a mid-match join over the
 transport — the local rebuild it drives is done (`DeterministicWorld.RecreateNativeWorld`),

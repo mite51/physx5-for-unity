@@ -15,7 +15,7 @@ namespace UNDPWR.Rollback
     /// grows.
     /// <para>
     /// Deliberately a fixed-size struct rather than an interface. A per-tick allocation
-    /// in a loop that replays the whole prediction horizon every frame is the easiest way
+    /// in a loop that replays the prediction window every frame is the easiest way
     /// to make a rollback engine stutter, and a fixed payload also keeps the wire format
     /// trivially serialisable. Games with richer input pack it into
     /// <see cref="Buttons"/> and the axis fields, or extend the struct and update the

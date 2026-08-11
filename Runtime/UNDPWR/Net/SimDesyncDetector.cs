@@ -92,11 +92,11 @@ namespace UNDPWR.Net
     /// tampered peer, or a version mismatch the handshake missed. Catching it here turns a
     /// slow, unattributable drift into a single reported tick.
     /// <para>
-    /// The check is <b>diagnostic</b> while the engine runs a fixed prediction horizon: the
-    /// horizon is the safety net, and a stray mismatch resolves itself. It becomes
-    /// <b>mandatory</b> the moment conditional rollback removes that net (adaptive-rollback
-    /// Phase 2), which is what <see cref="Fatal"/> expresses: set it, and the first
-    /// disagreement throws rather than merely reporting.
+    /// The check is <b>mandatory</b>, because the engine rewinds a data-dependent depth and
+    /// runs a data-dependent-length window with no fixed identical-sequence property to fall
+    /// back on, only PGS transparency. Confirmed-hash agreement is what verifies that
+    /// property held, which is why <see cref="Fatal"/> is set for every networked session:
+    /// the first disagreement throws rather than merely reporting.
     /// </para>
     /// Hashes can arrive before or after the local tick is computed and in any order, so both
     /// sides are kept in bounded ring buffers and compared whenever the matching half turns
@@ -118,7 +118,9 @@ namespace UNDPWR.Net
 
         /// <summary>
         /// When true, a disagreement throws <see cref="SimDesyncException"/> after the event
-        /// is raised. Must be true once the fixed horizon is removed.
+        /// is raised. A networked session sets it, because confirmed-hash agreement is the
+        /// only thing verifying the PGS transparency the engine's data-dependent rollback
+        /// rests on.
         /// </summary>
         public bool Fatal { get; set; }
 

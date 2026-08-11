@@ -21,10 +21,10 @@ line with it; where the two disagree, the investigation is newer.
 Read its §5 before proposing a theory. Five plausible ones have already been measured and
 killed, and the fifth was very nearly killed while being correct.
 
-[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) is the route from the fixed prediction
-horizon to rollback that fires only when something is wrong and only as deep as the correction
-requires. It reduces to one unanswered question — whether the framework can run PGS instead of
-TGS — and it is staged so that a no at that point ends it cleanly.
+[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) is the route, now fully travelled, from the
+fixed prediction horizon to rollback that fires only when something is wrong and only as deep
+as the correction requires. It turned on one question — whether the framework can run PGS
+instead of TGS — which came back yes, so the horizon was removed and PGS is now required.
 
 ## Where to start
 

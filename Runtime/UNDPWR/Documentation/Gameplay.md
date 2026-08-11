@@ -13,7 +13,7 @@ this is the intended way up.
 ## The idea in one paragraph
 
 Gameplay state has to roll back too. The engine already restores physics before every step
-and replays the whole prediction horizon every frame, so health, scores and the pending
+and replays the prediction window every frame, so health, scores and the pending
 action log have to be restored on that same schedule or they are simply wrong on the replay.
 The layer adds two managed state channels to the snapshot next to the physics blob, funnels
 every game into one step handler with a fixed per-tick order, and leans on the fact that a

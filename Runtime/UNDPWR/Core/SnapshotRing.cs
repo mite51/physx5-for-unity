@@ -221,9 +221,11 @@ namespace UNDPWR.Core
     /// input can still be applied: an input older than the ring cannot be honoured,
     /// because the state it would have to be applied to is gone.
     /// <para>
-    /// Capacity must exceed <see cref="SimConfig.PredictionHorizon"/>, which
-    /// <see cref="SimConfig.Validate"/> enforces, otherwise the tick a rollback needs to
-    /// rewind to has already been overwritten by the prediction that followed it.
+    /// Capacity must cover the whole live window -- <see cref="SimConfig.LocalInputDelay"/>
+    /// plus the lead the clock runs ahead of confirmation -- which
+    /// <see cref="SimConfig.Validate"/> enforces a floor for and the engine caps the lead
+    /// against, otherwise the tick a rollback needs to rewind to has already been overwritten
+    /// by the prediction that followed it.
     /// </para>
     /// </remarks>
     public sealed class SnapshotRing

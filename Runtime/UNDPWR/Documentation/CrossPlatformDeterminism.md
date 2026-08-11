@@ -284,10 +284,10 @@ solver.
 ## The encouraging part
 
 If bit-exactness across architectures were achieved, **the UNDPWR framework needs no
-architectural change whatsoever**. The fixed prediction horizon, the synchronised rebuild
+architectural change whatsoever**. The free-running prediction, the synchronised rebuild
 and the confirmed-tick hashing all work unmodified. Nothing in the netcode design assumes a
-single architecture; it assumes that identical operation sequences produce identical
-results, and that assumption is exactly what the work above would be restoring.
+single architecture; it assumes that the same operation on the same bytes produces the same
+result, and that assumption is exactly what the work above would be restoring.
 
 This is a problem that lives entirely underneath the framework, in the build configuration
 of PhysX itself.

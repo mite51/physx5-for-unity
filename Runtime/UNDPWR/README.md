@@ -6,39 +6,41 @@ grows.
 
 ## The one rule everything follows
 
-**Every peer performs an identical sequence of operations every tick.**
+**Only the confirmed timeline is compared between peers, and under PGS it is a pure
+function of the snapshot before each tick.**
 
-Not a similar sequence — an identical one. Everything below is a consequence of that, and
-most of the design's unusual choices exist to protect it.
+Everything below is a consequence of that. Most of the design's unusual choices exist to
+keep the confirmed timeline reproducible while letting each peer predict as far ahead as its
+own latency demands.
 
-The rule is forced on us by how PhysX works. It carries state between steps that no public
-API can read or write — warm-start contact impulses in persistent manifolds, friction
-anchors, broadphase pair bookkeeping, TGS substep state — so none of it can go in a
-snapshot. A peer that rewinds and resimulates does not exactly reproduce its own earlier
-trace, and clearing the caches makes it worse rather than better, because it discards
+The subtlety is forced on us by how PhysX works. It carries state between steps that no
+public API can read or write — warm-start contact impulses in persistent manifolds, friction
+anchors, broadphase pair bookkeeping, TGS substep state — so none of it can go in a snapshot.
+Clearing the caches on a rollback makes things worse rather than better, because it discards
 warm-start data the original tick genuinely had.
 
-Two peers that rewind by *different* amounts are not, as this README previously claimed,
-simply different worlds: `restore(S); step()` was measured to be a pure function of `S`,
-and worlds driven along deliberately different histories converge exactly once they are
-handed the same snapshot. The real problem is narrower and more annoying. The residual
-per-rewind error is far below the resolution of captured state, so a single divergent
-rollback shows nothing at all — and then it accumulates for a few hundred frames and flips
-a bit, long after anything that could be blamed for it.
+The obvious fear — that a rewind is lossy, so two peers rewinding by different amounts drift
+apart — turned out to be the wrong one. `restore(S); step()` was measured to be a pure
+function of `S`: worlds driven along deliberately different histories converge exactly once
+they are handed the same snapshot. Under PGS, with the cold-step discipline below, that holds
+to the bit, so a peer that rewound four ticks and one that rewound sixteen agree. Under TGS it
+does not — a residual far below the resolution of captured state accumulates for a few hundred
+frames and flips a bit long after the frame that caused it — which is why a networked session
+must run PGS.
 
-So peers rewind the same amount every tick regardless of what their network delivered. Not
-because differing depth is instantly fatal, but because it is invisibly and cumulatively
-fatal, which is worse. The measurements behind this, including what would have to change
-for the horizon to become adaptive, are in
+So each peer rewinds only as far as a misprediction reaches and leads by whatever its network
+allows, and the confirmed hashes still agree because they never depended on either. The
+measurements behind this are in
 [Documentation/DeterminismInvestigation.md](Documentation/DeterminismInvestigation.md).
 
 ## What follows from the rule
 
-**The prediction horizon is fixed, not adaptive.** `SimConfig.PredictionHorizon` is a
-constant number of ticks, and the engine replays the whole window every tick whether or
-not a misprediction occurred. A peer whose inputs arrive later than the horizon *stalls*
-rather than predicting further ahead — a visible pause instead of a silent desync. The
-steady cost also removes the frame-time spike a conditional rollback produces.
+**Prediction is free-running, not a fixed shared horizon.** The clock advances one tick per
+fixed update, and how far a peer runs ahead of the confirmed tick is emergent — it grows when
+confirmations lag and shrinks as they arrive. Each `Advance` replays only the ticks a
+misprediction or a new confirmation actually disturbed, not a whole window. A peer that would
+run further ahead than `SimConfig.SnapshotHistory` can retain *stalls* — a visible pause
+instead of silently losing the state a late input still needs.
 
 **Mid-match join is a synchronised rebuild, not a catch-up.** A joiner has no history and
 cannot manufacture one. But two worlds built from scratch and restored from the same
@@ -48,36 +50,39 @@ restores one agreed snapshot at one agreed tick and continues from there. Brief 
 everyone, joins are rare, and afterwards all peers are back on an identical footing. The
 same procedure is the recovery path when a desync is detected.
 
-**Confirmed-tick hashes can be compared bit-for-bit.** Because of the two points above,
-and only because of them.
+**Confirmed-tick hashes can be compared bit-for-bit.** Because of the points above, and a
+mandatory confirmed-hash check is what verifies the PGS transparency the whole scheme rests
+on.
 
-## Latency: two knobs, not one
+## Latency
 
-`PredictionHorizon` is not the only thing standing between a peer and a late packet, and
-it is the more expensive of the two.
+Two peer-local knobs bound how a late packet is handled, and neither has to be agreed on.
 
-`SimConfig.LocalInputDelay` stamps a peer's own input that many ticks further ahead than
-the tick it is currently simulating. An input is first *guessed* by the other peers
-`LocalInputDelay` ticks after its sender produced it, so anything crossing the network
-faster than the delay arrives before anyone predicts it — there is nothing to mispredict
-and nothing to correct. Past the delay, prediction and the horizon take over as before.
+`SimConfig.LocalInputDelay` stamps a peer's own input that many ticks further ahead than the
+tick it is currently simulating. An input is first *guessed* by the other peers
+`LocalInputDelay` ticks after its sender produced it, so anything crossing the network faster
+than the delay arrives before anyone predicts it — there is nothing to mispredict and nothing
+to correct. Past the delay, prediction and rollback take over.
 
-The two knobs bound different failures:
+`SimConfig.SnapshotHistory` bounds how far ahead of the confirmed tick the clock may run
+before the ring can no longer retain the whole live window. That cap — `SnapshotHistory -
+LocalInputDelay - 1` ticks of lead — is the point a peer stalls at rather than a shared
+constant, so a peer on a worse link simply leads less.
 
 | condition | consequence |
 | --- | --- |
 | one-way latency ≤ `LocalInputDelay` | that input is never predicted, so it never mispredicts |
-| ≤ `PredictionHorizon + LocalInputDelay - 1` | predicted, corrected on arrival, no stall |
-| beyond that | the peers waiting on it stall |
+| within the lead the ring allows | predicted, corrected on arrival, no stall |
+| beyond that | the peer waiting on it stalls until confirmation catches up |
 
-At the defaults — horizon 6, delay 2, 60 Hz — inputs under 33 ms are simulated exactly and
-inputs under 116 ms never stall anyone.
+At the defaults — delay 2, history 32, 60 Hz — inputs under 33 ms are simulated exactly, and
+a peer can lead by up to 29 ticks (about 480 ms) before the ring bounds it.
 
-Unlike the horizon, the delay is **peer-local and not hashed**. An input carries the tick
-it applies to and is applied at that tick whenever it arrives, so a peer delaying by two
-and a peer delaying by five simulate the identical input timeline. It costs local
-responsiveness and nothing else, which makes it the first knob to reach for; the horizon
-costs a longer replay every single frame.
+Both knobs are **peer-local and not hashed**. An input carries the tick it applies to and is
+applied at that tick whenever it arrives, so a peer delaying by two and a peer delaying by
+five simulate the identical input timeline; likewise a peer that retains more history just
+tolerates a later input and a larger lead. `LocalInputDelay` costs local responsiveness and
+nothing else, which makes it the knob to reach for.
 
 ## Determinism hazards this framework handles for you
 
@@ -116,9 +121,10 @@ for hard resynchronisation, where discarding history is the point.
 **Every step is preceded by a restore**, including steps nobody rolled back. Restoring
 state a world already has looks like a no-op and is not: it cools the contact cache, and a
 cold step and a warm step do not give the same answer. Making every step cold removes the
-asymmetry. Under PGS that is enough to make a replayed tick match an un-replayed one; under
-TGS the hardcoded solver keeps substep state that survives the restore, so a small residual
-divergence remains. See [the investigation](Documentation/DeterminismInvestigation.md).
+asymmetry. Under PGS that is enough to make a replayed tick match an un-replayed one, which is
+why a networked session requires PGS; under TGS the hardcoded solver keeps substep state that
+survives the restore, so a small residual divergence remains and a data-dependent rewind
+diverges. See [the investigation](Documentation/DeterminismInvestigation.md).
 
 **The framework decides sleeping, not PhysX.** PhysX's wake counter, when it resets, encodes
 how many contact interactions the body has — bookkeeping a snapshot cannot carry — so two
@@ -156,8 +162,8 @@ ownership, the join and resync procedure, where gameplay plugs in, and a failure
 ```csharp
 var config = SimConfig.Deterministic;
 config.TickRate = 60;
-config.PredictionHorizon = 6;   // hashed; must match on every peer
-config.LocalInputDelay  = 2;    // peer-local; 33 ms of mispredict-free budget
+config.LocalInputDelay = 2;     // peer-local; 33 ms of mispredict-free budget
+config.SnapshotHistory = 32;    // peer-local; bounds how far ahead the clock may lead
 
 SimLog.AttachNativeSink();
 
@@ -184,10 +190,10 @@ engine.Advance();
 
 Submit a *run* of ticks, not one. Confirmation needs an unbroken stream from each player, and
 one missing tick stalls that player's peers for good rather than briefly — so every tick from
-the last one submitted through `LocalInputTick` has to be covered. Two things open a gap if you
-stamp a single tick per frame: nothing covers the `LocalInputDelay` ticks the session starts at,
-and the first `Advance` jumps the clock a whole horizon, taking the tick to stamp with it.
-`SimSession.SubmitLocalInput` does this for you; the loop is only for driving the engine bare.
+the last one submitted through `LocalInputTick` has to be covered. Stamping a single tick per
+frame opens a gap at the start: `LocalInputTick` begins `LocalInputDelay` ticks ahead of the
+clock, so nothing covers the ticks between the tick the session starts at and that first stamp.
+`SimSession.SubmitLocalInput` fills the run for you; the loop is only for driving the engine bare.
 
 Everything that touches the simulation must go through `ISimStepHandler`. A force applied
 outside it happens on the original pass and not on the replay, which desyncs a peer

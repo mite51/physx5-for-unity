@@ -19,7 +19,7 @@ namespace UNDPWR.Diagnostics
     /// </para>
     /// <para>
     /// Second, the per-tick path must not allocate. String formatting in a rollback loop
-    /// that runs the prediction horizon over again every frame is not free, so the
+    /// that replays the prediction window every frame is not free, so the
     /// verbose channels compile out unless <c>UNDPWR_VERBOSE_LOGGING</c> is defined and
     /// check <see cref="Level"/> before formatting anything.
     /// </para>

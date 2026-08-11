@@ -15,8 +15,9 @@ tagged release, so everything to date sits under **Unreleased**.
 
 ## [Unreleased]
 
-Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`,
-`FreeRunningClock`, and — only when the clock is not free-running — `PredictionHorizon`.
+Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver` and
+`TickRate`. It no longer covers any prediction-horizon field: the clock is always
+free-running and the lead is peer-local.
 
 ### Added
 
@@ -37,19 +38,17 @@ Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`
 - **Transport and desync detection.** `ISimTransport` with an in-process
   `SimLoopbackNetwork` (configurable latency, loss and reordering), the `SimByteWriter` /
   `SimByteReader` little-endian wire codec, `SimInputCodec`, and `SimMessageKind` framing.
-  `SimSession` runs a config-hash handshake at join — a solver or horizon mismatch is
+  `SimSession` runs a config-hash handshake at join — a solver or config mismatch is
   refused rather than discovered as a desync — and exchanges confirmed-tick hashes through
   `SimDesyncDetector`. Inputs remain the only simulation data on the wire.
-- **Conditional rollback (Phase 2, opt-in).** `SimConfig.ConditionalRollback` rewinds only
-  as far as the earliest mispredicted tick instead of replaying the whole horizon every
-  frame, and lifts the one-confirmed-tick-per-frame cap. Requires the PGS solver; peer-local
-  and not hashed. `SimSession` forces desync detection fatal whenever it is set, because the
-  fixed horizon was the previous safety net.
-- **Free-running clock (Phase 3, opt-in).** `SimConfig.FreeRunningClock` advances
-  `_currentTick` off the fixed update independently of the confirmed tick, stalling only when
-  the lead would outrun `SnapshotHistory`. `PredictionHorizon` becomes a peer-local target
-  lead and leaves the config hash; the flag itself is hashed so both peers rest on the same
-  field set. Requires conditional rollback. Adds `RollbackEngine.CurrentLead`.
+- **Free-running clock and conditional rollback are the engine, not an option.**
+  `RollbackEngine.Advance` runs `_currentTick` off the fixed update independently of the
+  confirmed tick, stalling only when the lead would outrun `SnapshotHistory`, and rewinds only
+  as far as the earliest mispredicted or newly confirmed tick rather than a whole window. The
+  lead over the confirmed tick is peer-local and emergent, readable as
+  `RollbackEngine.CurrentLead`; how far it may run is bounded by `SnapshotHistory` alone.
+  `SimSession` always runs confirmed-hash desync detection fatal, because nothing but PGS
+  transparency stands behind a data-dependent rewind.
 - **Vehicle rollback state.** A variable-size `VehiclePayload` captures integrator state only
   — per-wheel rigid-body, suspension and sticky-tire accumulators, plus engine, gearbox
   (including the in-progress shift timer), autobox and clutch state for engine-drive — while
@@ -81,9 +80,10 @@ Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`
 
 ### Changed
 
-- **Default solver is now PGS** (`SimConfig.Solver`), following the Phase 1 measurements; the
-  field and its hashing already existed. This is the gate the adaptive-rollback phases sit
-  behind.
+- **PGS is now required, not merely the default** (`SimConfig.Solver`), following the Phase 1
+  measurements; the field and its hashing already existed. `SimConfig.Validate` refuses any
+  other solver for a networked session, because the free-running clock and data-dependent
+  rewind rest on PGS replay transparency.
 - `DeterministicWorld.Register` now applies `PxwApplyDeterministicRigidDefaults` — disabling
   speculative CCD and clamping max depenetration velocity — instead of only setting solver
   iterations, so the runtime matches the determinism the native suite measures.
@@ -129,6 +129,17 @@ Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`
   `RecordPeer` now take `SimStateHashes` rather than a `ulong`; `SimDesyncReport.LocalHash` and
   `PeerHash` remain as the folded values.
 
+### Removed
+
+- **The fixed prediction horizon.** `SimConfig.PredictionHorizon` and the two flags that were
+  its opt-out — `SimConfig.ConditionalRollback` and `SimConfig.FreeRunningClock` — are gone,
+  along with `RollbackEngine.RunPrediction`. The engine no longer replays a fixed-length window
+  or pins the clock to `confirmed + horizon`; free-running prediction and conditional rollback,
+  previously opt-in behind those flags, are now the only mode. **Breaking config-hash change:**
+  `ComputeHash` no longer folds in the horizon or the flags, so this build will not interoperate
+  with one that predates the removal. Lead is now bounded by `SnapshotHistory` alone, and
+  `Validate` requires `SnapshotHistory > LocalInputDelay + 1`.
+
 ### Fixed
 
 - **No session had ever actually enabled `eENABLE_ENHANCED_DETERMINISM`, and every session had
@@ -152,12 +163,10 @@ Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`
   all told you to do — left the first `LocalInputDelay` ticks of the session covered by nobody, and
   `InputBuffer.ConfirmedThrough` advances only over ticks every player has filled. So the frontier
   never left the start, the clock ran out to its bound and stopped, and the game came up with input
-  doing nothing at all. A second gap opened later in the same stream: the clock does not move one
-  tick per frame, since the first `Advance` under a fixed horizon jumps it from the confirmed tick
-  to the end of the prediction window, and the tick to stamp jumped with it.
-  `SimSession.SubmitLocalInput` now submits the whole run from the last tick it sent through the
-  one being stamped, seeded by `Start` and re-seeded by `NotifyRebuilt`, which closes both — a
-  copied sample is also what the other peers' prediction already assumed for the skipped ticks.
+  doing nothing at all. `SimSession.SubmitLocalInput` now submits the whole run from the last tick
+  it sent through the one being stamped, seeded by `Start` and re-seeded by `NotifyRebuilt`, which
+  closes the hole — a copied sample is also what the other peers' prediction already assumed for
+  the skipped ticks.
   Callers driving `RollbackEngine` directly must loop the same way; the docs above now show it.
 - **Conditional rollback ran the simulation `LocalInputDelay` times too fast.** Draining the whole
   confirmed backlog per `Advance` (Phase 2) was justified on the grounds that PGS transparency
@@ -166,8 +175,8 @@ Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver`
   time. `AdvanceConfirmed` drags the clock up to whatever it confirms, and local input is stamped
   ahead, so a peer whose own input is the last one a tick waits on — guaranteed on a solo host —
   found the frontier permanently in the future and drained to it every frame. Confirmation is now
-  capped at one tick per call on the fixed-horizon path and at the wall clock under
-  `FreeRunningClock`. Shorter replays are unaffected; only the rate is.
+  capped at the wall clock (`CurrentTick + 1`) so the clock cannot outrun real time. Shorter
+  replays are unaffected; only the rate is.
 - Vehicles registered through UNDPWR were added to the scene but never stepped, and disabling
   a vehicle did nothing — both silent failures, now corrected (see above).
 - Contact and trigger draining were no-op native stubs that returned nothing to a managed

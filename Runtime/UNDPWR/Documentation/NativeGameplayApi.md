@@ -20,10 +20,11 @@ field-for-field, since arrays of them are memcpy'd across the boundary in bulk.
 
 ## The one rule these must not break
 
-Everything in this API runs inside the tick loop, and the tick loop is replayed. The
-framework's governing rule — every peer performs an identical sequence of operations every
-tick — extends to every function here. Two obligations follow, and both are about *order*,
-because order is what a snapshot cannot restore and therefore what silently diverges.
+Everything in this API runs inside the tick loop, and the tick loop is replayed. For the
+confirmed step to match across peers every operation within a tick must be issued in the same
+order on each — a requirement that survives independent of how far any peer predicts — so it
+extends to every function here. Two obligations follow, and both are about *order*, because
+order is what a snapshot cannot restore and therefore what silently diverges.
 
 - **Forces** must be applied only in `OnBeforeStep`, and the framework guarantees it calls
   the step handlers in a fixed order, so the native side does not need to sort force

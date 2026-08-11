@@ -11,35 +11,43 @@ This document is the route from here to there. It is written to be abandoned par
 measurement in phase 1 comes back the wrong way, so each phase states what it needs from the
 one before and what to do if it does not get it.
 
+> **Status: fully landed.** Every phase below is implemented and is now the *only* mode, not
+> opt-in. The fixed prediction horizon — `SimConfig.PredictionHorizon` and the
+> `ConditionalRollback` / `FreeRunningClock` flags that used to gate the adaptive path — has
+> been removed, and PGS is required. The rest of this document is kept as the design record;
+> read the "current design" below as the design this work replaced, not as it stands today.
+
 ---
 
-## 1. Where the current design falls short of that goal
+## 1. Where the earlier design fell short of that goal
 
-Three gaps, all of them consequences of one thing.
+Three gaps, all of them consequences of one thing. This section describes the fixed-horizon
+engine this work replaced.
 
-**The local clock is not free-running.** This is the big one, and it is easy to miss from
+**The local clock was not free-running.** This was the big one, and it was easy to miss from
 reading `SimConfig.PredictionHorizon` alone. After every prediction run,
 `_currentTick == _confirmedTick + PredictionHorizon` exactly, so on the next call
-`_currentTick >= targetTick` is always true and the stall condition in
-`RollbackEngine.Advance` reduces to "no new confirmation arrived". The simulation advances
-one tick per *confirmed* tick and freezes otherwise. The horizon is a constant display lead,
-not a buffer the clock can spend down: a peer whose packet is late does not coast on its
-prediction, it stops, and so does everyone waiting on it.
+`_currentTick >= targetTick` was always true and the stall condition in
+`RollbackEngine.Advance` reduced to "no new confirmation arrived". The simulation advanced
+one tick per *confirmed* tick and froze otherwise. The horizon was a constant display lead,
+not a buffer the clock could spend down: a peer whose packet was late did not coast on its
+prediction, it stopped, and so did everyone waiting on it.
 
-That is lockstep behaviour. It is a defensible design — it is roughly GGPO with a fixed
-window — but it is the opposite of the goal above, and no amount of tuning the horizon
-changes its shape.
+That was lockstep behaviour. It was a defensible design — roughly GGPO with a fixed window —
+but it was the opposite of the goal above, and no amount of tuning the horizon changed its
+shape.
 
-**Rollback is unconditional and full-width.** `RunPrediction` replays the entire window every
+**Rollback was unconditional and full-width.** `RunPrediction` replayed the entire window every
 frame whether or not anything was mispredicted: `1 + PredictionHorizon` restore-and-step pairs
-per frame, forever. "Minimise rollbacks" is not a tuning problem here, it is a structural one.
+per frame, forever. "Minimise rollbacks" was not a tuning problem there, it was a structural one.
 
-**Rollback depth is fixed rather than fitted to the correction.** A misprediction at
-`c + 5` and one at `c + 1` cost exactly the same, because the engine does not look at where
+**Rollback depth was fixed rather than fitted to the correction.** A misprediction at
+`c + 5` and one at `c + 1` cost exactly the same, because the engine did not look at where
 the correction landed.
 
-All three exist to hold one property: every peer performs an identical sequence of operations
-every tick. Remove the need for that property and all three go away together.
+All three existed to hold one property: every peer performs an identical sequence of operations
+every tick. Removing the need for that property — which PGS transparency does — made all three
+go away together.
 
 ---
 
@@ -211,28 +219,28 @@ chain-depth limit is what stands between the two.
 **The decision: PGS.** Every workload the framework can measure — box grids, stacks up to eight
 deep, the capsule, the mass ratio, and articulations on both a free and a grounded chain — is
 bitwise transparent under PGS with the cold-step discipline, so two peers rolling back by
-different depths agree. TGS is not, so the adaptive horizon in phases 2 and 3 requires PGS.
-`SimConfig.Solver` now defaults to `ProjectedGaussSeidel`; the field stays, hashed, so a
-strictly fixed-horizon session can still opt into TGS for its marginally tighter stacks. The
-one standing limit is a content constraint, not a solver one: a contact chain deeper than eight
-bodies defeats variable depth on either solver, and the section 3u diagnostic is how that is
-kept enforced rather than remembered. This unblocks phases 2 and 3 below.
+different depths agree. TGS is not, so the adaptive rollback in phases 2 and 3 requires PGS.
+`SimConfig.Solver` defaults to `ProjectedGaussSeidel` and `Validate` now requires it for a
+networked session; the field and its hashing stay, and TGS remains in the enum for its interop
+numbering. The one standing limit is a content constraint, not a solver one: a contact chain
+deeper than eight bodies defeats variable depth on either solver, and the section 3u diagnostic
+is how that is kept enforced rather than remembered. This unblocks phases 2 and 3 below.
 
 The only case a **no** would still apply to is a game whose core loop needs deep stacks
 (nine-plus) resolved under varying rollback depth. That is out of reach for either solver
 without resetting TGS substep state, which §9 says needs an instrumented PhysX build rather than
 the public API — a much larger project than this one, and not obviously possible. Such a game
-keeps the fixed horizon and this document as the record of why.
+could not use this framework's rollback, and this document is the record of why.
 
 ---
 
 ## 5. Phase 2 — conditional rollback
 
-**Status: implemented, opt-in.** Phase 1 chose PGS (§4), which unblocked this. It ships behind
-`SimConfig.ConditionalRollback`, off by default so the fixed horizon remains the tested default
-and TGS sessions are unaffected. `Validate` refuses the flag under any solver but PGS, since a
-data-dependent rewind depth only lands where a full re-simulation would when replay is
-transparent — the property PGS was measured to have and TGS was measured to lack.
+**Status: landed as the only mode.** Phase 1 chose PGS (§4), which unblocked this. Conditional
+rollback is no longer a flag — it is how `RollbackEngine` always runs — and `Validate` requires
+PGS for every networked session, since a data-dependent rewind depth only lands where a full
+re-simulation would when replay is transparent, the property PGS was measured to have and TGS
+was measured to lack.
 
 Roll back when something is actually wrong, and only to where it went wrong.
 
@@ -259,12 +267,11 @@ Roll back when something is actually wrong, and only to where it went wrong.
   simulation `LocalInputDelay` times too fast. Conditional rollback still pays for itself in
   shorter replays; it does not get to set the rate. Phase 3 states the same rule directly, since
   there the clock is wall time rather than a function of the frontier.
-- **Desync detection is mandatory with the flag.** The fixed horizon was the safety net;
-  conditional rollback removes it, leaving confirmed-tick hash exchange as the only thing between
-  a drift and a silent divergence. `SimSession` forces `SimDesyncDetector.Fatal = true` whenever
-  the config sets `ConditionalRollback`, so a session cannot turn the optimisation on and leave
-  the check off. The transport, `TryGetConfirmedSnapshot`, `Snapshot.CombinedHash` and
-  `HashPerEntity` are all in place (§9 of Architecture.md).
+- **Desync detection is mandatory.** The fixed horizon was the safety net; conditional rollback
+  removes it, leaving confirmed-tick hash exchange as the only thing between a drift and a silent
+  divergence. `SimSession` forces `SimDesyncDetector.Fatal = true` for every session, so the
+  optimisation can never run with the check off. The transport, `TryGetConfirmedSnapshot`,
+  `Snapshot.CombinedHash` and `HashPerEntity` are all in place (§9 of Architecture.md).
 
 Why this cannot desync a session even if the bookkeeping were wrong: the confirmed timeline is
 advanced first, by the same cold restore-and-step per tick as the fixed path, and its hashes are
@@ -281,25 +288,23 @@ burst rather than the average — `SnapshotHistory` bounds it.
 
 ## 6. Phase 3 — a free-running clock
 
-**Status: implemented, opt-in.** Behind `SimConfig.FreeRunningClock`, which requires
-`ConditionalRollback` (and so PGS) and is refused otherwise. Off by default.
+**Status: landed as the only mode.** The clock is always free-running; there is no flag and no
+fixed-horizon alternative, and PGS is required.
 
-- `RollbackEngine.AdvanceFreeRunning` advances `_currentTick` once per fixed update,
-  independently of `_confirmedTick`. It stalls only when the lead would outrun the snapshot
-  ring — `SnapshotHistory - LocalInputDelay - 1`, the same live-window bound `Validate` uses,
-  which is a real physical limit rather than a hashed constant. New confirmation is always
-  processed even while pinned, because it shrinks the lead and frees the clock next frame.
-- `PredictionHorizon` stops being a simulation parameter and **leaves the hash** while the flag
-  is set (`ComputeHash` gates it on `!FreeRunningClock`, and hashes `FreeRunningClock` itself so
-  both peers agree on the rule). What remains is a peer-local target lead, readable as
-  `RollbackEngine.CurrentLead`.
+- `RollbackEngine.Advance` advances `_currentTick` once per fixed update, independently of
+  `_confirmedTick`. It stalls only when the lead would outrun the snapshot ring —
+  `SnapshotHistory - LocalInputDelay - 1`, the same live-window bound `Validate` uses, which is
+  a real physical limit rather than a hashed constant. New confirmation is always processed even
+  while pinned, because it shrinks the lead and frees the clock next frame.
+- `PredictionHorizon` is gone: the lead is a peer-local, emergent value
+  (`RollbackEngine.CurrentLead`) that no longer exists as a config field or in the hash, so two
+  peers that lead by different amounts still agree at join.
 - The lead can be adapted to observed latency rather than a configured constant. This is where
   Overwatch's time dilation belongs, and it is already legal: `LocalInputDelay` is peer-local
   and unhashed, so a peer may retune its own lead mid-session without agreement, watching
   `CurrentLead` and how late inputs arrive.
-- The prediction window is now variable-width, so it shares `RunPredictionConditional` with
-  Phase 2 — the routine takes the window end as a parameter (`_confirmedTick + PredictionHorizon`
-  for the fixed horizon, `_currentTick` for the free clock) and is otherwise identical.
+- The prediction window is variable-width, so `RunPredictionConditional` takes the window end
+  as a parameter (`_currentTick`, the tick the free clock just advanced to).
 - **Confirmation may not run the clock past wall time.** `AdvanceConfirmed` drags `_currentTick`
   up to whatever it confirms, so `newConfirmed` is capped at `_currentTick + 1`. Without it a peer
   whose own input is the last one a tick waits on is pulled to a frontier that is permanently
@@ -310,9 +315,9 @@ burst rather than the average — `SnapshotHistory` bounds it.
 
 At that point the local player never waits on a remote packet, remote inputs that beat the
 delay are never predicted at all, and the ones that do not are corrected from the tick they
-went wrong. As with Phase 2, none of this can desync a session: the confirmed timeline is
-advanced by the same cold restore-and-step whatever the clock is doing, and only its hashes are
-compared — mandatory and fatal here, since the fixed horizon is gone.
+went wrong. None of this can desync a session: the confirmed timeline is advanced by the same
+cold restore-and-step whatever the clock is doing, and only its hashes are compared — mandatory
+and fatal for every session, since there is no fixed horizon to fall back on.
 
 ---
 
@@ -332,12 +337,13 @@ it:
 
 ## 8. Summary
 
-| phase | state | if it fails |
+| phase | state | if it had failed |
 | --- | --- | --- |
 | 0 — local input delay | **done** | — |
-| 1 — solver decision | **done**: PGS chosen and defaulted (§4) | stop, keep the fixed horizon |
-| 2 — conditional rollback | **done**, opt-in behind `SimConfig.ConditionalRollback`; requires PGS; ships with mandatory fatal desync detection | stop, keep the fixed horizon |
-| 3 — free-running clock | **done**, opt-in behind `SimConfig.FreeRunningClock`; requires conditional rollback; `PredictionHorizon` leaves the hash and becomes a peer-local lead | keep conditional rollback, keep the fixed lead |
+| 1 — solver decision | **done**: PGS chosen and now required (§4) | stop, keep the fixed horizon |
+| 2 — conditional rollback | **done**, now the only mode; requires PGS; ships with mandatory fatal desync detection | stop, keep the fixed horizon |
+| 3 — free-running clock | **done**, now the only mode; the lead is a peer-local emergent value and `PredictionHorizon` is removed from the config and the hash | keep conditional rollback, keep the fixed lead |
 
-The order matters more than the schedule. Phase 1 is a measurement, not a build, and it decides
-whether phases 2 and 3 exist at all.
+The order mattered more than the schedule. Phase 1 was a measurement, not a build, and it
+decided whether phases 2 and 3 existed at all. All three landed, and the fixed horizon they
+were gated behind has been removed.

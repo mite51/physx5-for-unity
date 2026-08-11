@@ -32,10 +32,13 @@ must currently share a CPU architecture.
 
 ## 2. The constraint everything else follows from
 
-> **Every peer must perform an identical sequence of operations every tick.**
+> **Every peer's confirmed timeline must be reproducible tick for tick, and under PGS it is
+> a pure function of the snapshot before each tick.**
 
-Not a similar sequence. An identical one — same operations, same order, same count, every
-frame, regardless of what the network delivered.
+That is what lets confirmed hashes be compared between peers regardless of how far each one
+predicted ahead or rewound. It relaxes an older, stricter rule — that every peer perform an
+identical *sequence* of operations every tick — which TGS needed and PGS does not; the
+framework now requires PGS precisely so the looser guarantee is available (§2.2).
 
 This is stricter than most rollback netcode requires, and it is forced on us by PhysX.
 PhysX carries state between steps that no public API can read or write: warm-start contact
@@ -84,32 +87,31 @@ indefinitely. Peers do not need a *shared* history to agree — they need an ide
 restore runs from a cold contact cache, a step after another step runs warm, and the two do
 not agree. Which is why the framework restores before *every* step (§6), including steps
 nobody rolled back: it makes every step cold, so the warm/cold distinction disappears. Under
-PGS that is enough for full transparency. Under TGS — which is what `SimConfig` selects — it
-is not, because TGS's substep state survives the restore and nothing exposed clears it.
+PGS — which `SimConfig` requires for a networked session — that is enough for full
+transparency. Under TGS it is not, because TGS's substep state survives the restore and
+nothing exposed clears it, which is why TGS is refused.
 
 ### 2.3 What follows
 
-- **The identical-sequence rule is load-bearing, not belt-and-braces.** Under TGS, or with a
-  contact chain more than 8 bodies deep, peers that do different amounts of work *do*
-  diverge. The rule is what makes them agree.
-- **The horizon must be fixed rather than merely bounded.** Not because differing depth is
-  instantly fatal — a single divergent rollback produces no observable difference — but
-  because the per-event error is below the resolution of captured state and accumulates
-  until it flips a bit, hundreds of frames after the cause. That is the worst possible
-  failure shape: invisible in short tests, uncorrelated with any single event.
+- **PGS transparency is load-bearing, not belt-and-braces.** Under TGS, or with a contact
+  chain more than 8 bodies deep, peers that do different amounts of work *do* diverge — the
+  per-event error is below the resolution of captured state and accumulates until it flips a
+  bit, hundreds of frames after the cause, the worst possible failure shape. Under PGS the
+  cold-step discipline makes replay bitwise transparent, so peers rewinding and leading by
+  different amounts agree anyway. The framework requires PGS so it can lean on that.
 - **Having no history at all is a category difference, not a degree.** A world that has
   never simulated cannot match one that has, under any contact reset mode. Two *used* worlds
   restored from the same snapshot do agree — so the distinction is warmed versus never
   simulated, not the specific contents of the warm-up.
 
-So the framework never tries to make differing histories converge. It arranges for them
-never to differ in the first place, and when that becomes impossible — a peer joining
-mid-match has no history at all — it puts every peer onto a common history at once.
+So the framework never tries to make differing predicted histories converge; it compares only
+the confirmed timeline, which under PGS is a pure function of the snapshot before each tick
+however far each peer predicted. And when a peer has no history at all — joining mid-match — it
+puts every peer onto a common history at once rather than chasing.
 
-Four concrete rules fall out, and each has a section below: every step is preceded by a
-restore (§6.1), the prediction horizon is fixed (§6), the confirmed timeline advances at
-most one tick per frame (§6.3), and joining is a synchronised rebuild rather than a
-catch-up (§9).
+Three concrete rules fall out, and each has a section below: every step is preceded by a
+restore (§6.1), the confirmed timeline is the only thing peers compare (§6.5), and joining is
+a synchronised rebuild rather than a catch-up (§9).
 
 ---
 
@@ -288,13 +290,12 @@ This is not an oversight to fix later; it is the property the whole design is bu
 - Two worlds restored from the *same* snapshot **are** identical with each other. The
   framework relies on this everywhere.
 - Whether a restored world matches the world the snapshot came from depends on the solver:
-  under PGS it does, provided every step is cold; under TGS it does not. The fixed-horizon
-  design relies on this nowhere, so both solvers are supportable there. The Phase 1
-  measurement (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4) chose PGS as the
-  default because the adaptive horizon in Phases 2 and 3 does rely on it: peers that rewind by
-  different depths only agree if replay is transparent, which is a PGS property. TGS stays
-  available, hashed, for a strictly fixed-horizon session that wants its marginally tighter
-  stacks.
+  under PGS it does, provided every step is cold; under TGS it does not. The engine's
+  data-dependent rewind and free-running lead rely on that transparency — peers that rewind
+  and lead by different amounts only agree if replay is transparent, which is a PGS property —
+  so the Phase 1 measurement (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4) chose
+  PGS and `SimConfig.Validate` now requires it. TGS remains in the enum for its interop
+  numbering, but a networked session may not select it.
 
 ### 5.3 Do not clear the contact caches
 
@@ -338,12 +339,14 @@ same way.
 never grown during a session, because allocating during a rollback would drop a frame at
 exactly the moment the simulation is busiest.
 
-Capacity bounds how far back a late input can be honoured. An input older than the ring
-cannot be applied, because the state it would apply to is gone — that peer has exceeded the
-session's latency budget and needs a resynchronisation (§9). `SimConfig.Validate` enforces
-`SnapshotHistory > PredictionHorizon + LocalInputDelay`: those two together span the live
-window, from the confirmed tick out to the furthest tick any input has been stamped for
-(§7.4). Below that, the tick a rollback still needs has already been overwritten.
+Capacity bounds how far back a late input can be honoured, and how far ahead the clock may
+lead. An input older than the ring cannot be applied, because the state it would apply to is
+gone — that peer has exceeded the session's latency budget and needs a resynchronisation (§9).
+`SimConfig.Validate` enforces `SnapshotHistory > LocalInputDelay + 1`: the ring must span the
+live window — from the confirmed tick out to the furthest tick any input has been stamped for
+(§7.4) — and leave the clock room to lead confirmation by at least one tick. The engine caps
+the lead at `SnapshotHistory - LocalInputDelay - 1`. Below that, the tick a rollback still
+needs has already been overwritten.
 
 Buffers are handed out via `BeginWrite` / `CompleteWrite` so a capture writes straight into
 the ring rather than into a temporary that then gets copied.
@@ -376,29 +379,36 @@ that this replays under rollback is `TestFrameworkSleepReplays` (§16).
 ## 6. The tick lifecycle
 
 This is the core of the framework. `RollbackEngine.Advance()` is called once per fixed
-update and performs the **same work every time**, whether or not anything was mispredicted.
+update. It advances the confirmed timeline by whatever the network has settled, moves the
+clock forward one tick of wall time, and resimulates only the prediction that a misprediction
+or a new confirmation actually disturbed.
 
 ### 6.1 The shape of a frame
 
 ```
 Advance()
 │
-├─ 1. can we proceed?            confirmed frontier vs fixed horizon      → stall if not
+├─ 1. AdvanceConfirmed()         drain the confirmed backlog, capped at the wall clock
+│      for each newly confirmed tick c+1:
+│        restore(snapshot[c])
+│        step(c+1)               with fully known inputs
+│        capture → snapshot[c+1], marked confirmed
+│        c := c+1
 │
-├─ 2. AdvanceConfirmed()         at most ONE tick
-│      restore(snapshot[c])
-│      step(c+1)                 with fully known inputs
-│      capture → snapshot[c+1], marked confirmed
-│      c := c+1
+├─ 2. advance the clock          _currentTick += 1               → stall if it would
+│                                                                  outrun the ring
 │
-└─ 3. RunPrediction()            ALWAYS exactly PredictionHorizon ticks
-       for i in 1..horizon:
-           restore(snapshot[c+i-1])   ← before EVERY step, not just the first
-           step(c+i)                  with known-or-predicted inputs
-           capture → snapshot[c+i], unconfirmed
+└─ 3. RunPredictionConditional(windowEnd = _currentTick)
+       replayFrom := earliest tick a misprediction or new confirmation disturbed
+       restore(snapshot[replayFrom-1])
+       for tick in replayFrom..windowEnd:
+           restore(snapshot[tick-1])   ← before EVERY step but the first
+           step(tick)                  with known-or-predicted inputs
+           capture → snapshot[tick], unconfirmed
 ```
 
-After every call, `CurrentTick == ConfirmedTick + PredictionHorizon`.
+The lead `CurrentTick - ConfirmedTick` is emergent: it grows when confirmations lag and
+shrinks as they arrive, bounded only by the snapshot ring.
 
 The restore inside the prediction loop is the **cold-step discipline**, and it is the least
 obvious line in the engine. Restoring state the world already has looks like a no-op, and it
@@ -411,113 +421,59 @@ session cold, including steps nobody rolled back, and the distinction stops exis
 Restore before every step. **Exactly one restore, never two** — quaternion normalisation is
 not idempotent, so a second restore shifts the rotation by one ULP.
 
-### 6.2 Why prediction replays unconditionally
+### 6.2 Why prediction replays only what was disturbed
 
-A conventional rollback engine rewinds only when a prediction turns out wrong. That makes
-the amount of work — and therefore the operation sequence — depend on network timing, which
-differs per peer. Replaying the full window every frame costs a little throughput and buys
-the identical-sequence property.
+`RunPredictionConditional` rewinds from the earliest tick a misprediction dirtied —
+`RollbackEngine.SubmitInput` folds `InputBuffer.Submit`'s return into `_pendingReplayFrom` —
+up to the current tick, and reuses every valid snapshot below that. A frame with no
+misprediction and no new confirmation replays only the single new tick the clock advanced to.
 
-It also removes the frame-time spike that conditional rollback produces on the frames it
-fires. Cost becomes steady and predictable instead of bursty. This is the default; a PGS
-session that would rather minimise redundant work can opt into conditional rollback and accept
-the spike (§6.5).
+This lands on exactly the state a full re-simulation would, because PGS replay is transparent
+(§2.2): `restore(S); step()` is a pure function of `S`, so a shorter, data-dependent rewind
+reaches the same result as replaying the whole window. That transparency is why a networked
+session must run PGS — `SimConfig.Validate` refuses any other solver. A bug in the
+replay-start bookkeeping could smear this peer's *predicted* snapshots, which are never
+exchanged; it cannot desync the session, because peers only ever compare confirmed hashes.
 
-### 6.3 Why the confirmed timeline advances at most one tick per frame
-
-This one is subtle and easy to get wrong.
+### 6.3 Why the confirmed timeline may be drained in one frame
 
 A confirmed tick is computed as `restore(previous); step`. The restore is exact for
 everything the snapshot holds — but not for the state PhysX carries between steps, which
-comes from whichever step ran immediately before (§5.2). The cold-step discipline makes that
-predecessor's *contact cache* irrelevant; it does not make the predecessor irrelevant, since
-TGS substep state survives regardless.
+comes from whichever step ran immediately before (§5.2). Under TGS that predecessor matters,
+so how many confirmations arrive in a frame — a property of the network, not the simulation —
+would change the confirmed state, and peers whose packets clumped differently would disagree.
 
-So consider a peer that receives three confirmations at once versus one that receives them
-across three frames:
-
-```
-drains all three:   … step(c+1)  step(c+2)  step(c+3) …
-                              ↑ predecessor of step(c+2) is a confirmed step
-
-one per frame:      … step(c+1)  [horizon prediction steps]  step(c+2) …
-                                                    ↑ predecessor is a prediction step
-```
-
-Same tick, same inputs, different predecessor, therefore different hidden state. The number
-of confirmations arriving in a frame is a property of the network, not of the simulation, so
-peers would disagree about *confirmed* state purely because their packets clumped
-differently.
-
-As with rollback depth (§2.2), a single occurrence produces no visible difference — which is
-exactly why this is worth guarding against rather than measuring for. The damage is
-cumulative and only becomes observable long after the frames that caused it.
-
-Capping at one keeps every peer's per-frame sequence identical. It is also sustainable:
-inputs are produced at the tick rate and `Advance` runs at the tick rate, so one per frame
-is the steady state, and bursts are absorbed by the horizon.
+PGS removes the hazard: `restore(S); step()` is a pure function of `S`, so a confirmed tick is
+independent of its predecessor and draining a burst in one frame gives the same hashes as
+draining it across frames. Since a networked session already requires PGS, the whole confirmed
+backlog is drained per call. It is capped only at the wall clock (`CurrentTick + 1`), so a peer
+whose own input is the last one a tick waits on — a solo host, or anyone during a lull — cannot
+be pulled to a frontier stamped `LocalInputDelay` ticks in the future and run that many times
+too fast. Confirmation settles the past; it is not licence to simulate the future early.
 
 ### 6.4 Stalling
 
-If confirmation falls further behind than the horizon allows, `Advance()` returns `false`
-and simulates nothing.
+If advancing the clock would lead confirmation by more than the snapshot ring can retain —
+`SnapshotHistory - LocalInputDelay - 1` ticks — `Advance()` returns `false` and simulates
+nothing until fresh confirmation shrinks the lead.
 
-Stalling is deliberate. Predicting further ahead would make this peer's sequence longer
-than everyone else's and desync it *silently*; stalling makes the problem visible, bounded
-and recoverable.
+Stalling is deliberate. Leading further would overwrite a tick a late input still needs, a
+silent loss of the live window; stalling makes the problem visible, bounded and recoverable.
+The lead is peer-local and emergent, so a peer on a worse link simply leads less rather than
+forcing the whole session into lockstep with its slowest member. §7.4 works the timing through
+and explains which knob to widen.
 
-The budget being exhausted is `PredictionHorizon + LocalInputDelay - 1` ticks of **one-way**
-delivery, not a round trip — 116 ms at the defaults. §7.4 works the timing through and
-explains which of the two knobs to widen.
+### 6.5 The confirmed timeline is the only thing peers compare
 
-### 6.5 Conditional rollback (opt-in, Phase 2)
-
-Everything above describes the default. Setting `SimConfig.ConditionalRollback` swaps two of
-those behaviours for the Phase 2 design, and nothing else:
-
-- **Step 3 becomes `RunPredictionConditional()`.** Instead of replaying the whole window, it
-  replays from the earliest tick a misprediction dirtied — `RollbackEngine.SubmitInput` folds
-  `InputBuffer.Submit`'s return into `_pendingReplayFrom` — up to the horizon end, and reuses
-  every valid snapshot below that. A frame with no misprediction and no new confirmation
-  replays nothing. The cold-step discipline is unchanged: one restore to `replayFrom - 1`, then
-  one restore before each subsequent step.
-- **Step 2 drops the one-tick cap** and drains the whole confirmed backlog (§6.3's cap is a
-  TGS concern; PGS makes a confirmed step a pure function of the confirmed snapshot before it,
-  so draining a burst in one frame gives the same hashes as draining it across frames).
-
-This is refused unless `Solver` is PGS, because both changes rely on transparent replay
-(§2.2), which the Phase 1 measurement found for PGS alone. It is peer-local and unhashed: the
-confirmed timeline — the only thing peers compare — is advanced by the same cold restore-and-step
-per tick either way, so a conditional peer and a fixed-horizon peer still agree tick for tick.
-A bug in the replay-start bookkeeping could smear this peer's *predicted* snapshots, which are
-never exchanged; it cannot desync the session.
-
-The safety net changes with it. The fixed horizon guaranteed identical per-frame sequences;
-conditional rollback gives that up, so confirmed-hash desync detection stops being a diagnostic
-and becomes mandatory. `SimSession` forces `SimDesyncDetector.Fatal = true` whenever the flag is
-set (§9).
-
-### 6.6 Free-running clock (opt-in, Phase 3)
-
-`SimConfig.FreeRunningClock` goes one step further, and requires conditional rollback (so also
-PGS). It replaces step 1's gate and the `CurrentTick == ConfirmedTick + PredictionHorizon`
-invariant:
-
-- `Advance` dispatches to `AdvanceFreeRunning`, which moves `_currentTick` forward **once per
-  fixed update**, independently of confirmation. The lead over the confirmed tick is whatever
-  the network allows, and the only stall is the physical one — running further ahead than the
-  snapshot ring can retain (`SnapshotHistory - LocalInputDelay - 1`). The prediction window is
-  `(_confirmedTick, _currentTick]`, variable-width, replayed by the same
-  `RunPredictionConditional` (§6.5) with `_currentTick` as its end.
-- `PredictionHorizon` stops being a shared operation-sequence length and becomes a peer-local
-  target lead (`RollbackEngine.CurrentLead` reads the live value). It therefore **leaves the
-  config hash** while this flag is set; `FreeRunningClock` itself is hashed so both peers agree
-  on that rule. A peer may retune its lead from observed latency mid-session — the Overwatch-style
-  adaptation — without any agreement, exactly as `LocalInputDelay` already allows.
-
-Under the fixed horizon the whole session runs in lockstep with its slowest link; a free-running
-clock lets each peer keep its own time and only agree on confirmed state, which under PGS is
-independent of how far ahead each predicted. Desync detection is mandatory here too (§9).
+Because prediction depth and clock lead are both data-dependent and peer-local, there is no
+fixed identical-sequence property to fall back on — only PGS transparency. The confirmed
+timeline is advanced by a cold restore-and-step that is a pure function of the snapshot before
+it, so every peer's confirmed hash for a tick agrees regardless of how far each predicted or
+rewound. That agreement is what verifies the transparency held, which is why confirmed-hash
+desync detection is mandatory and fatal: `SimSession` sets `SimDesyncDetector.Fatal = true`
+for every session (§9). A peer may retune its own lead from observed latency mid-session — the
+Overwatch-style adaptation — without any agreement, exactly as `LocalInputDelay` already
+allows, since `CurrentLead` is nothing the config hash covers.
 
 ---
 
@@ -526,7 +482,7 @@ independent of how far ahead each predicted. Desync detection is mandatory here 
 ### 7.1 Shape
 
 `SimInput` is a fixed-size struct — button bits plus four analogue axes — not an interface.
-A per-tick allocation in a loop that replays the whole horizon every frame is the easiest
+A per-tick allocation in a loop that replays the prediction window every frame is the easiest
 way to make a rollback engine stutter, and a fixed payload is also trivially serialisable.
 
 `SimInputFrame` holds every player's input for one tick, **ordered by player ID, never by
@@ -550,7 +506,8 @@ fields count. A correct guess costs nothing.
 received. It only moves forward, and `RecomputeConfirmedFrontier` walks from its current
 position rather than rescanning, so it is O(1) amortised.
 
-This value is what gates §6.2 — it is the boundary between "final" and "guessed".
+This value is the boundary between "final" and "guessed": it caps the confirmed drain in §6.1
+and marks where prediction (§6.2) takes over.
 
 ### 7.4 Local input delay
 
@@ -560,42 +517,40 @@ plus `SimConfig.LocalInputDelay`, rather than for the tick it is simulating righ
 Stamping ahead leaves a hole behind it, and the hole is fatal rather than untidy. Nothing ever
 covers the `delay` ticks a session starts at, and §7.3's frontier stops at the first tick that is
 not complete — so it never leaves the start, and the peer stalls for good once the clock reaches
-its bound, with input appearing to do nothing at all. The clock is the second source of holes: it
-does not always move one tick per frame, since the first `Advance` under a fixed horizon jumps it
-from the confirmed tick to the end of the prediction window, and the tick to stamp jumps with it.
+its bound, with input appearing to do nothing at all.
 
-`SimSession.SubmitLocalInput` closes both by filling every tick from the last one it submitted
+`SimSession.SubmitLocalInput` closes the hole by filling every tick from the last one it submitted
 through the one being stamped, copying the current sample across the gap — which is also the
 value the other peers' prediction already assumed for those ticks, so filling them agrees with
 the guess rather than correcting it. A caller driving `RollbackEngine` directly, with no session,
 has to do the same thing itself.
 
-The point is to arrive ahead of the guess. Work the timing through with all peers' confirmed
-clocks advancing together, which is what §6.3 enforces. Peer Q stamps an input for tick
-`T = c + horizon + delay` while its confirmed tick is `c`. Peer P first *predicts* tick `T`
-when its own window reaches it, at confirmed `T - horizon` — which is `delay` ticks of wall
-time later. P must *confirm* `T` at confirmed `T - 1`, which is `horizon + delay - 1` ticks
-later. So:
+The point is to arrive ahead of the guess. An input stamped `delay` ticks ahead of the tick its
+sender is simulating reaches the other peers before they have to predict it, so anything crossing
+the network faster than the delay is in hand before the guess is made. Past the delay, prediction
+and rollback absorb it, up to the lead the snapshot ring allows before a peer stalls (§6.4):
 
 | one-way latency | outcome |
 | --- | --- |
 | ≤ `LocalInputDelay` | the input is in hand before anyone predicts it; no misprediction |
-| ≤ `PredictionHorizon + LocalInputDelay - 1` | predicted, then corrected on arrival; no stall |
-| beyond | the peers waiting on it stall (§6.4) |
+| within the lead the ring allows | predicted, then corrected on arrival; no stall |
+| beyond | the peer waiting on it stalls (§6.4) |
 
-Note that this is one-way delivery in both rows. Nothing in the loop waits for a reply, so
-sizing either knob against a round trip overprovisions it by a factor of two.
+Note that this is one-way delivery in every row. Nothing in the loop waits for a reply, so
+sizing the knob against a round trip overprovisions it by a factor of two.
 
 The delay is **peer-local and not hashed**, which is unusual for a timing field and worth
 being clear about. An input carries the tick it applies to and is applied at that tick
 whenever it arrives, so a peer delaying by two and a peer delaying by five produce the same
-input timeline and simulate identically. Only the horizon has to match, because the horizon
-is the length of the per-frame operation sequence (§2.2) and the delay is not.
+input timeline and simulate identically. `SnapshotHistory` is peer-local too, for the same
+reason: neither field changes what the simulation does with an input, only when a peer produces
+it or how long it keeps a snapshot (§2.2), so hashing either would reject a session over a
+difference that cannot desync it.
 
-Which knob to spend is a real choice. The delay costs local responsiveness and nothing else,
-and it removes mispredictions outright. The horizon costs a full extra replayed tick every
-frame, forever, and only lets a misprediction be corrected more cheaply. Reach for the delay
-first, and size the horizon for the jitter tail the delay does not cover.
+The delay is the knob to spend: it costs local responsiveness and nothing else, and it removes
+mispredictions outright rather than merely absorbing them. What it does not cover — the jitter
+tail past the delay — is corrected by prediction and a data-dependent rewind, up to the lead
+`SnapshotHistory` allows before a peer stalls.
 
 ---
 
@@ -677,15 +632,15 @@ the wire (`SimMessageKind`):
   simulates precisely the value it sent. Any quantisation is the game's choice *before*
   submit, never on the wire. Each frame re-sends a small redundancy window of recent inputs,
   so one lost datagram is recovered by the next without a reliable channel.
-- **Handshake** — the config hash (`SimConfig.ComputeHash`, which includes `Solver` and the
-  prediction horizon) and the player set, exchanged once at join. A peer whose hash or player
-  set differs is *refused* — a PGS/TGS or horizon mismatch is a clean rejection, not a desync
+- **Handshake** — the config hash (`SimConfig.ComputeHash`, which includes `Solver` and
+  `TickRate`) and the player set, exchanged once at join. A peer whose hash or player set
+  differs is *refused* — a solver or config mismatch is a clean rejection, not a desync
   discovered mid-match.
 - **Hash** — a confirmed tick and its three channel hashes (`Snapshot.Hashes`).
   `SimDesyncDetector` compares each peer's against its own for the same confirmed tick and
-  raises the first disagreement. It is diagnostic while the fixed horizon is the safety net;
-  `SimSession` forces it mandatory (`SimDesyncDetector.Fatal = true`) whenever
-  `SimConfig.ConditionalRollback` removes that net (§6.5).
+  raises the first disagreement. It is mandatory and fatal (`SimDesyncDetector.Fatal = true`,
+  set by `SimSession` for every session), because a data-dependent rewind and free-running
+  lead have no safety net but the PGS transparency this check verifies (§6.5).
 
   The channels travel separately rather than only as the fold peers compare, which costs
   sixteen bytes and is the difference between a report that says the worlds diverged and one
@@ -840,9 +795,11 @@ exposed — the pruning structure and the solver type — because they change qu
 solver behaviour respectively, and a peer that answered a query differently would take a
 different gameplay decision.
 
-`ComputeHash()` covers tick rate, horizon, gravity, solver iterations, thresholds, density,
+`ComputeHash()` covers tick rate, gravity, solver and its iterations, thresholds, density,
 isotropy tolerance, sleep policy and backend. It deliberately excludes diagnostics-only
-fields such as `DisablePvd`, so a peer running with the debugger attached is not rejected.
+fields such as `DisablePvd`, so a peer running with the debugger attached is not rejected, and
+the peer-local timing fields (`LocalInputDelay`, `SnapshotHistory`), which cannot desync a
+session.
 
 The sleep fields are in the hash for a reason worth spelling out: a peer that slept bodies on
 a different schedule from everyone else would produce state that diverges only once something
@@ -870,7 +827,7 @@ presentation-only worlds.
 | Desyncs only when someone spawns | Stable ID allocated outside the tick loop — check for the allocator warning. |
 | Desyncs only under load | Frame-rate-dependent logic leaking in, or `Advance` being called a variable number of times. |
 | Desync appears only once a scene settles | Peers disagree on the sleep parameters, or on `SleepTicks` (§5.6). Confirm the config hash matches. |
-| Constant stalling | `PredictionHorizon` too small for actual latency, or a peer that cannot hold tick rate. |
+| Constant stalling | `SnapshotHistory` too small for the lead the latency demands, or a peer that cannot hold tick rate. |
 | Works in editor, fails in build | Verbose logging changing timing, or a `[Conditional]` path with side effects. |
 
 ---
@@ -925,8 +882,9 @@ over the transport — the local mechanics are in place (`ISimTransport`, wire m
 config-hash handshake and confirmed-tick hash exchange in §9.1, and `PrepareForRebuild` now
 rebuilds the native world per §9), but nothing yet negotiates the resume tick and agreed
 snapshot between peers over the wire; editor tooling; the sample scene. Adaptive rollback is
-implemented: conditional rollback (Phase 2) and the free-running clock (Phase 3) ship opt-in
-behind `SimConfig`, see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §5–6. Articulation
-and vehicle rollback work and are measured, and a native multi-peer harness (`RunMultiPeerTests`
-in `PxwUndpwrTests`) drives two worlds over a lossy, latent channel and confirms their per-tick
-hashes agree under both solvers (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).
+the shipped default: the free-running clock and conditional rollback that were Phases 2 and 3
+are now the only mode, and the fixed horizon has been removed, see
+[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §5–6. Articulation and vehicle rollback work
+and are measured, and a native multi-peer harness (`RunMultiPeerTests` in `PxwUndpwrTests`)
+drives two worlds over a lossy, latent channel and confirms their per-tick hashes agree under
+PGS (see [AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) §4).

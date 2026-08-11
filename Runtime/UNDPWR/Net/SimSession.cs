@@ -41,7 +41,7 @@ namespace UNDPWR.Net
     /// Two invariants the session depends on. Every peer constructs its engine with the same
     /// player-ID set, so slot order agrees. And every peer computes the same
     /// <see cref="SimConfig.ComputeHash"/>; the handshake refuses a peer whose hash differs,
-    /// so a PGS/TGS or horizon mismatch is a clean rejection at join rather than a desync
+    /// so a solver or other config mismatch is a clean rejection at join rather than a desync
     /// discovered mid-match.
     /// </para>
     /// Inputs are re-sent in a small redundancy window every frame, so a lost datagram is
@@ -134,16 +134,11 @@ namespace UNDPWR.Net
             _configHash = config.ComputeHash();
             _localPlayerId = localPlayerId;
 
-            // Conditional rollback and the free-running clock both remove the fixed horizon
-            // that was the session's safety net: a peer that rewinds a data-dependent depth,
-            // or runs a data-dependent-length window, no longer has the identical-sequence
-            // property to fall back on, only PGS transparency. That has to be verified rather
-            // than assumed, so confirmed-hash detection becomes mandatory and fatal the moment
-            // either flag is set. AdaptiveRollbackPlan.md §5-6.
-            if (config.ConditionalRollback || config.FreeRunningClock)
-            {
-                _detector.Fatal = true;
-            }
+            // The engine rewinds a data-dependent depth and runs a data-dependent-length
+            // window, so there is no fixed identical-sequence property to fall back on, only
+            // PGS transparency. That has to be verified rather than assumed, so confirmed-hash
+            // detection is mandatory and fatal. AdaptiveRollbackPlan.md §5-6.
+            _detector.Fatal = true;
 
             _playerIds = new uint[playerIds.Count];
             for (int i = 0; i < playerIds.Count; ++i)
@@ -268,13 +263,11 @@ namespace UNDPWR.Net
         /// <see cref="InputBuffer.ConfirmedThrough"/> walks forward only over ticks every player
         /// has filled, and stops at the first that is not — so one missing tick is not untidy,
         /// it is terminal: the frontier never gets past it, and the peer stalls for good once
-        /// the clock reaches its bound, with input appearing to do nothing at all. Two things
-        /// open such a hole and neither is the caller's fault. Stamping ahead by
-        /// <see cref="SimConfig.LocalInputDelay"/> means nothing ever covers the delay ticks a
-        /// session starts at. And the clock does not always move one tick per frame: the first
-        /// <see cref="RollbackEngine.Advance"/> under a fixed horizon jumps it a whole horizon,
-        /// from the confirmed tick to the end of the prediction window, so the tick to stamp
-        /// jumps with it and skips everything in between.
+        /// the clock reaches its bound, with input appearing to do nothing at all. Stamping
+        /// ahead by <see cref="SimConfig.LocalInputDelay"/> opens exactly such a hole at the
+        /// start: <see cref="RollbackEngine.LocalInputTick"/> is the clock plus the delay, so
+        /// the very first stamp is for tick <c>LocalInputDelay</c> and nothing ever covers the
+        /// delay ticks between the tick a session starts at and that first stamp.
         /// </para>
         /// <para>
         /// Copying the current sample across the gap is also the right value, not just a

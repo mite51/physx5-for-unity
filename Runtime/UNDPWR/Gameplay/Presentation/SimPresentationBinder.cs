@@ -13,7 +13,7 @@ namespace UNDPWR.Gameplay
     /// </summary>
     /// <remarks>
     /// This is the one-way valve between simulation and presentation. The simulation advances
-    /// in fixed steps and, under this framework, replays its whole horizon every frame; the
+    /// in fixed steps and, under this framework, replays its prediction window every frame; the
     /// display refreshes at whatever rate the monitor runs. Snapping visible transforms
     /// straight onto the newest simulated pose makes motion judder at any refresh rate that is
     /// not an exact multiple of the tick rate. Interpolating between the previous and current

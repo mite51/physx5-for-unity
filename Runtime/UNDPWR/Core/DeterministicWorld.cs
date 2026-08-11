@@ -13,10 +13,10 @@ namespace UNDPWR.Core
     /// <remarks>
     /// A peer runs exactly one of these. The framework used to consider running a second
     /// world to hold a confirmed timeline alongside a predicted one, and that is not what
-    /// happens: measurements showed bit-exactness does not require a separate world, it
-    /// requires that every peer perform an identical sequence of operations, which
-    /// <see cref="UNDPWR.Rollback.RollbackEngine"/> arranges with a fixed prediction
-    /// horizon.
+    /// happens: measurements showed bit-exactness does not require a separate world, only
+    /// that the confirmed timeline advance by a cold restore-and-step, which under PGS is a
+    /// pure function of the snapshot before it. <see cref="UNDPWR.Rollback.RollbackEngine"/>
+    /// drives that single world for both the confirmed timeline and prediction.
     ///
     /// <para><b>Why registration is deferred.</b> PhysX only guarantees reproducible
     /// results when actors are inserted into the scene in the same order. Gameplay code
@@ -148,9 +148,9 @@ namespace UNDPWR.Core
             sleepResult.ThrowIfFailed("PxwWorldSetSleepParams");
 
             SimLog.Info(string.Format(
-                "World created: {0} Hz, horizon {1} ticks, local input delay {2} ticks, {3} backend, " +
+                "World created: {0} Hz, local input delay {1} ticks, {2} snapshot history, {3} backend, " +
                 "sleep after {4} ticks",
-                _config.TickRate, _config.PredictionHorizon, _config.LocalInputDelay, _config.Backend,
+                _config.TickRate, _config.LocalInputDelay, _config.SnapshotHistory, _config.Backend,
                 _config.SleepTicks == 0 ? "never" : _config.SleepTicks.ToString()));
         }
 
@@ -532,9 +532,9 @@ namespace UNDPWR.Core
         /// Hashes the live world.
         /// </summary>
         /// <remarks>
-        /// Comparable bit-for-bit against another peer only when both have run an
-        /// identical sequence of operations. That is what the fixed prediction horizon
-        /// guarantees, and why the horizon is not adaptive.
+        /// Comparable bit-for-bit against another peer at a confirmed tick, because the
+        /// confirmed timeline is advanced by a cold restore-and-step that is a pure function
+        /// of the snapshot before it under PGS, independent of how far each peer predicted.
         /// </remarks>
         public ulong HashState()
         {

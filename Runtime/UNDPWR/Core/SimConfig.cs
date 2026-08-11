@@ -82,41 +82,6 @@ namespace UNDPWR.Core
         public int TickRate = 60;
 
         /// <summary>
-        /// How many ticks ahead of the last confirmed tick a peer simulates.
-        /// </summary>
-        /// <remarks>
-        /// Fixed rather than derived from measured latency, and hashed, because the engine
-        /// replays this whole window every tick: the horizon is the length of every peer's
-        /// per-frame operation sequence, and those sequences have to match.
-        /// <para>
-        /// The reason they have to match is narrower than it looks, and it is not that a
-        /// rewind is lossy. <c>restore(S); step()</c> was measured to be a pure function of
-        /// <c>S</c>, and under PGS the cold-step discipline makes replay bitwise
-        /// transparent outright, with peers rewinding by four and by sixteen landing on
-        /// identical state. The framework runs TGS, which carries per-substep state that a
-        /// restore does not reach and nothing exposed clears. The residual is far below the
-        /// resolution of captured state, so one divergent rollback shows nothing at all,
-        /// and then it accumulates for a few hundred frames and flips a bit long after the
-        /// frame that caused it. Invisible once and fatal later is the worst shape a bug
-        /// can have, so peers rewind the same amount every tick regardless of what their
-        /// network delivered. Documentation/DeterminismInvestigation.md section 8 records
-        /// what would have to change for this to become adaptive.
-        /// </para>
-        /// <para>
-        /// Together with <see cref="LocalInputDelay"/> this sets the latency budget: an
-        /// input has <c>PredictionHorizon + LocalInputDelay - 1</c> ticks of flight time
-        /// before the peers waiting on it stall, which is 116 ms at the defaults. That is
-        /// one-way delivery, not a round trip; nothing in the loop waits for a reply.
-        /// Widening the horizon buys tolerance at the cost of a longer replay every frame
-        /// and more of the window being guessed. Widening the delay buys the same tolerance
-        /// at the cost of local input latency, and removes mispredictions rather than
-        /// absorbing them.
-        /// </para>
-        /// </remarks>
-        [Tooltip("Fixed number of ticks predicted ahead of the confirmed tick. Must match on every peer.")]
-        public int PredictionHorizon = 6;
-
-        /// <summary>
         /// How many ticks ahead of the tick it is simulating a peer stamps its own input.
         /// </summary>
         /// <remarks>
@@ -129,8 +94,8 @@ namespace UNDPWR.Core
         /// What it buys is mispredictions that never happen. A remote input is first
         /// guessed <c>LocalInputDelay</c> ticks after its sender produced it, so anything
         /// that crosses the network faster than that is already in hand before the guess is
-        /// made. Below the delay there is nothing to correct; above it, prediction and the
-        /// horizon take over as before.
+        /// made. Below the delay there is nothing to correct; above it, prediction and
+        /// rollback take over as before.
         /// </para>
         /// <para>
         /// The cost is exactly what it sounds like: the local player's own action happens
@@ -145,77 +110,22 @@ namespace UNDPWR.Core
 
         /// <summary>
         /// How many past ticks of state are retained, bounding rollback distance and
-        /// deciding how far back a late input can still be applied.
+        /// deciding both how far back a late input can still be applied and how far ahead of
+        /// the confirmed tick the clock may run.
         /// </summary>
         /// <remarks>
         /// Peer-local and not hashed: a peer that retains more history than another
-        /// simulates no differently, it just tolerates a later input. It has to cover the
-        /// whole live window, which runs from the confirmed tick to the furthest tick any
-        /// input has been stamped for, so <see cref="Validate"/> requires it to exceed
-        /// <see cref="PredictionHorizon"/> plus <see cref="LocalInputDelay"/>.
+        /// simulates no differently, it just tolerates a later input and a larger lead. It
+        /// has to cover the whole live window, which runs from the confirmed tick out to the
+        /// furthest tick input has been stamped for, so <see cref="Validate"/> requires it to
+        /// exceed <see cref="LocalInputDelay"/> plus at least one tick of lead. The clock is
+        /// free-running: the lead over the confirmed tick is emergent, growing when
+        /// confirmations lag and capped at <c>SnapshotHistory - LocalInputDelay - 1</c> so
+        /// the ring always retains the whole window. That cap, not a shared constant, is what
+        /// a peer stalls against when it runs too far ahead.
         /// </remarks>
-        [Tooltip("Snapshots retained. Must exceed PredictionHorizon + LocalInputDelay.")]
+        [Tooltip("Snapshots retained. Must exceed LocalInputDelay plus one tick of lead.")]
         public int SnapshotHistory = 32;
-
-        /// <summary>
-        /// Rewinds only as far as a misprediction or a new confirmation reaches, instead of
-        /// re-simulating the whole prediction window every tick. Phase 2 of
-        /// Documentation/AdaptiveRollbackPlan.md.
-        /// </summary>
-        /// <remarks>
-        /// Off by default, and requires <see cref="Solver"/> to be
-        /// <see cref="SimSolverType.ProjectedGaussSeidel"/>. The fixed-horizon engine re-runs
-        /// every predicted tick unconditionally so that every peer executes an identical
-        /// operation sequence, which is the safety net a solver without transparent replay
-        /// depends on. PGS was measured bitwise transparent under the cold-step discipline
-        /// (§4), which is precisely the property that makes a shorter, data-dependent rewind
-        /// land on the same state a full re-simulation would. Under any other solver a
-        /// data-dependent rewind desyncs silently, so <see cref="Validate"/> refuses it.
-        /// <para>
-        /// Peer-local and deliberately not hashed. Because the confirmed timeline is advanced
-        /// by a cold restore-and-step per tick regardless of this flag, and PGS makes that a
-        /// pure function of the predecessor snapshot, a peer running conditional rollback and
-        /// a peer running the fixed horizon compute identical confirmed hashes. This only
-        /// changes how much prediction work a peer redoes per frame, never what the
-        /// simulation agrees on. It does remove the fixed horizon as a safety net, though, so
-        /// a session that turns it on must run confirmed-hash desync detection; the
-        /// <see cref="UNDPWR.Net.SimSession"/> forces the detector fatal when it is set.
-        /// </para>
-        /// </remarks>
-        [Tooltip("Rewind only as far as needed instead of the full horizon. Requires PGS. Peer-local; need not match.")]
-        public bool ConditionalRollback = false;
-
-        /// <summary>
-        /// Runs the simulation clock off the fixed update instead of pinning it to the
-        /// confirmed tick plus <see cref="PredictionHorizon"/>. Phase 3 of
-        /// Documentation/AdaptiveRollbackPlan.md.
-        /// </summary>
-        /// <remarks>
-        /// Off by default, and requires <see cref="ConditionalRollback"/> (and therefore
-        /// <see cref="Solver"/> PGS). The fixed horizon locks the clock to the slowest link:
-        /// a peer advances only when confirmation does, so the whole session runs in lockstep
-        /// with its worst latency. A free-running clock advances once per fixed update
-        /// regardless, and the lead over the confirmed tick is whatever the network allows,
-        /// bounded only by <see cref="SnapshotHistory"/> -- a physical limit on how far back
-        /// a late input can still be applied, not a constant every peer has to share.
-        /// <para>
-        /// This is the point at which <see cref="PredictionHorizon"/> stops being a
-        /// simulation parameter: with the clock free, it is no longer the length of a shared
-        /// operation sequence, only a peer-local target lead. So it leaves the hash while this
-        /// flag is set (see <see cref="ComputeHash"/>), and a peer may retune its lead from
-        /// observed latency mid-session -- the Overwatch-style adaptation the framework was
-        /// aimed at -- without any agreement. The clock only agrees on confirmed state, which
-        /// under PGS is independent of how far ahead each peer predicted.
-        /// </para>
-        /// <para>
-        /// Unlike <see cref="ConditionalRollback"/> this <em>is</em> hashed, because it
-        /// changes the hashing rule for <see cref="PredictionHorizon"/>: two peers have to
-        /// agree on whether the horizon is a shared constant or a peer-local lead, or their
-        /// config hashes would rest on different field sets.
-        /// </para>
-        /// </remarks>
-        [Tooltip("Free-run the clock off the fixed update instead of the confirmed tick. Requires ConditionalRollback.")]
-        public bool FreeRunningClock = false;
 
         // ------------------------------------------------------------ simulation ----
 
@@ -223,31 +133,32 @@ namespace UNDPWR.Core
         public Vector3 Gravity = new Vector3(0.0f, -9.81f, 0.0f);
 
         /// <summary>
-        /// Which constraint solver runs. Hashed, since a session cannot mix the two.
+        /// Which constraint solver runs. Hashed, since a session cannot mix the two, and
+        /// required to be PGS for a networked session.
         /// </summary>
         /// <remarks>
-        /// PGS is the default. The Phase 1 measurement (Documentation/AdaptiveRollbackPlan.md
-        /// §4) is complete and chose it: PGS is bitwise transparent under the cold-step
-        /// discipline across every workload the framework is measured on — box grids, stacks
-        /// up to eight deep, a settled character capsule, a 40x mass ratio, and articulations
-        /// on both a free-swinging and a grounded chain — so two peers can roll back by
-        /// different depths and still agree. TGS is not: it carries per-substep state a
-        /// restore does not reach, and it diverges under variable depth on a grid at impact,
-        /// on deep stacks and on every cold-step transparency test, holding only on quiet,
-        /// shallow scenes. Adaptive rollback (Phases 2 and 3) requires transparency to
-        /// variable depth, so it requires PGS.
+        /// PGS is the default and the only solver <see cref="Validate"/> accepts. The Phase 1
+        /// measurement (Documentation/AdaptiveRollbackPlan.md §4) chose it: PGS is bitwise
+        /// transparent under the cold-step discipline across every workload the framework is
+        /// measured on — box grids, stacks up to eight deep, a settled character capsule, a
+        /// 40x mass ratio, and articulations on both a free-swinging and a grounded chain — so
+        /// two peers can roll back by different depths and still agree. TGS is not: it carries
+        /// per-substep state a restore does not reach, and it diverges under variable depth on
+        /// a grid at impact, on deep stacks and on every cold-step transparency test, holding
+        /// only on quiet, shallow scenes. The rollback engine rewinds by whatever depth a
+        /// misprediction reaches and leads by whatever the network allows, so it requires that
+        /// transparency and therefore requires PGS.
         /// <para>
         /// The cost is small and bounded. On a 16-high stack PGS-cold actually settles
         /// quieter than TGS-cold (residual 0.000146 m/s against 0.003556 m/s) though it sags
         /// about 68 µm more; the one real limit is that a contact chain deeper than eight
         /// bodies defeats variable rollback depth on <em>either</em> solver, which is a
         /// content constraint the native chain-depth diagnostic measures rather than a solver
-        /// choice. Set this to TGS only for a strictly fixed-horizon session that wants TGS's
-        /// marginally tighter stacks and will never rewind by varying depths; it is hashed,
-        /// so every peer must agree.
+        /// choice. The enum retains <see cref="SimSolverType.TemporalGaussSeidel"/> for its
+        /// interop numbering, but a networked <see cref="SimConfig"/> may not select it.
         /// </para>
         /// </remarks>
-        [Tooltip("Constraint solver. Must match on every peer. PGS is required for adaptive rollback. See AdaptiveRollbackPlan.md.")]
+        [Tooltip("Constraint solver. Must match on every peer. PGS is required. See AdaptiveRollbackPlan.md.")]
         public SimSolverType Solver = SimSolverType.ProjectedGaussSeidel;
 
         /// <summary>Solver position iterations applied to every dynamic body.</summary>
@@ -381,41 +292,29 @@ namespace UNDPWR.Core
                 reason = "TickRate must be positive.";
                 return false;
             }
-            if (PredictionHorizon < 0)
-            {
-                reason = "PredictionHorizon cannot be negative.";
-                return false;
-            }
             if (LocalInputDelay < 0)
             {
                 reason = "LocalInputDelay cannot be negative.";
                 return false;
             }
-            if (SnapshotHistory <= PredictionHorizon + LocalInputDelay)
+            if (SnapshotHistory <= LocalInputDelay + 1)
             {
                 reason = string.Format(
-                    "SnapshotHistory ({0}) must exceed PredictionHorizon ({1}) plus LocalInputDelay ({2}), which " +
-                    "together span the live window from the confirmed tick to the furthest tick input has been " +
-                    "stamped for. Below that, a tick a rollback still needs has already been overwritten.",
-                    SnapshotHistory, PredictionHorizon, LocalInputDelay);
+                    "SnapshotHistory ({0}) must exceed LocalInputDelay ({1}) plus at least one tick of lead. The " +
+                    "ring has to span the live window from the confirmed tick out to the furthest tick input has " +
+                    "been stamped for, and leave room for the clock to run at least one tick ahead of confirmation; " +
+                    "below that a tick a rollback still needs has already been overwritten.",
+                    SnapshotHistory, LocalInputDelay);
                 return false;
             }
-            if (ConditionalRollback && Solver != SimSolverType.ProjectedGaussSeidel)
+            if (Solver != SimSolverType.ProjectedGaussSeidel)
             {
                 reason =
-                    "ConditionalRollback requires the ProjectedGaussSeidel solver. A rewind whose depth depends " +
-                    "on network timing only lands on the same state a full re-simulation would when replay is " +
-                    "bitwise transparent, which the Phase 1 measurement (AdaptiveRollbackPlan.md §4) found for " +
-                    "PGS alone. Under TGS a data-dependent rewind desyncs silently; keep the fixed horizon.";
-                return false;
-            }
-            if (FreeRunningClock && !ConditionalRollback)
-            {
-                reason =
-                    "FreeRunningClock requires ConditionalRollback. A free-running clock runs a different-length " +
-                    "prediction window every frame, which only agrees on confirmed state because replay is " +
-                    "transparent -- the same property ConditionalRollback rests on. Enable ConditionalRollback " +
-                    "(which requires PGS) first, or keep the fixed horizon.";
+                    "A networked session requires the ProjectedGaussSeidel solver. The rollback engine rewinds by " +
+                    "whatever depth a misprediction reaches and leads by whatever the network allows, which only " +
+                    "lands on the same state a full re-simulation would when replay is bitwise transparent -- the " +
+                    "property the Phase 1 measurement (AdaptiveRollbackPlan.md §4) found for PGS alone. Under TGS a " +
+                    "data-dependent rewind desyncs silently.";
                 return false;
             }
             if (DefaultDensity <= 0.0f)
@@ -462,18 +361,6 @@ namespace UNDPWR.Core
         {
             ulong hash = 0xcbf29ce484222325UL;
             hash = SimHash.Combine(hash, TickRate);
-
-            // Whether the clock is free-running is itself hashed, because it decides whether
-            // the next field is. A free-running peer treats PredictionHorizon as a peer-local
-            // target lead and leaves it out; a fixed-horizon peer treats it as the shared
-            // operation-sequence length and hashes it. Hashing the flag keeps both peers'
-            // hashes resting on the same field set.
-            hash = SimHash.Combine(hash, FreeRunningClock ? 1 : 0);
-            if (!FreeRunningClock)
-            {
-                hash = SimHash.Combine(hash, PredictionHorizon);
-            }
-
             hash = SimHash.Combine(hash, Gravity.x);
             hash = SimHash.Combine(hash, Gravity.y);
             hash = SimHash.Combine(hash, Gravity.z);
