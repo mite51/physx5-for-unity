@@ -139,7 +139,13 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreateShape(IntPtr geometry, IntPtr material, bool isExclusive);
-        
+
+        // Attaches an extra shape to a rigid actor, so one body can carry several colliders
+        // (e.g. a core sphere plus surface spheres for a spiked ball). Recompute the actor's
+        // mass after all shapes are attached.
+        [DllImport(PHYSX_DLL)]
+        public static extern void AttachShape(IntPtr actor, IntPtr shape);
+
         [DllImport(PHYSX_DLL)]
         public static extern void GetShapeLocalPose(IntPtr shape, out PxTransformData destPose);
 

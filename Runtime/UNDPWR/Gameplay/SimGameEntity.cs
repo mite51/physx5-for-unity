@@ -98,6 +98,18 @@ namespace UNDPWR.Gameplay
             ApplyPresentation(false);
         }
 
+        /// <summary>
+        /// Assigns the visual root that is shown while the entity is active and hidden while it is
+        /// pooled out, and applies the current active state immediately. Call this once the visual
+        /// exists (e.g. from a code-built entity's own visual setup); a prefab may instead wire the
+        /// serialized <see cref="presentationRoot"/> field in the inspector.
+        /// </summary>
+        protected void SetPresentationRoot(GameObject root)
+        {
+            presentationRoot = root;
+            ApplyPresentation(IsActive);
+        }
+
         /// <summary>Sets this tick's input, called by the player binding before the update pass.</summary>
         public void SetInput(SimInput input)
         {
