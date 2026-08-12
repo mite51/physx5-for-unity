@@ -223,13 +223,16 @@ namespace UNDPWR.Core
         /// collapsed to the identity.
         /// </summary>
         /// <remarks>
-        /// See <see cref="SimMass"/> for why this exists. The default of 1% covers the
+        /// See <see cref="SimMass"/> for why this exists. The default of 5% covers the
         /// bodies that are actually dangerous, which are the ones that are roughly as
-        /// wide as they are tall and deep, without disturbing genuinely elongated bodies
-        /// whose principal axes are well defined. Set to zero to keep exact principal
-        /// axes and accept the sensitivity.
+        /// wide as they are tall and deep -- a spiked ball sits near 1.3% and a plain
+        /// box far above 5% -- without disturbing genuinely elongated bodies whose
+        /// principal axes are well defined. When the frame collapses, a near-origin
+        /// centre of mass is snapped to the origin as well, so the whole mass frame
+        /// becomes peer-identical rather than only its orientation. Set to zero to keep
+        /// exact principal axes and accept the sensitivity.
         /// </remarks>
-        public float MassIsotropyTolerance = 0.01f;
+        public float MassIsotropyTolerance = 0.05f;
 
         // -------------------------------------------------------------- backend ----
 

@@ -115,8 +115,9 @@ seconds into a match.
 **Contact caches are left alone.** Clearing them on rollback feels right and is wrong.
 Measured over a 30-tick replay: leaving them alone gives 1.8e-06 m error, `resetFiltering`
 gives 1.4e-02 m, `reinsert` gives 9.8e-02 m. Clearing discards warm-start data the
-original tick actually had. `SimContactResetMode.None` is the default; the other modes are
-for hard resynchronisation, where discarding history is the point.
+original tick actually had. The rollback path never clears them; the other
+`SimContactResetMode` values are a manual hard-resynchronisation tool only, where discarding
+history is the point.
 
 **Every step is preceded by a restore**, including steps nobody rolled back. Restoring
 state a world already has looks like a no-op and is not: it cools the contact cache, and a

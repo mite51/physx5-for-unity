@@ -171,20 +171,24 @@ namespace UNDPWR.Interop
     /// that no snapshot can capture. Mirrors <c>pxw::PxwContactResetMode</c>.
     /// </summary>
     /// <remarks>
-    /// The intuition that a rewind should begin by wiping this state is wrong, and the
-    /// native suite measures why. PhysX warm-starts the solver from the previous step's
-    /// contact impulses, and no public API can read or write them, so a resimulated tick
-    /// can never be bit-identical to the original. Given that, the goal changes from
-    /// "reproduce exactly" to "stay as close as possible", and wiping the caches moves
-    /// the replay further away rather than closer, because it discards warm-start data
-    /// the original tick actually had.
+    /// This is NOT part of rollback and the rollback engine never invokes it. Under the
+    /// cold-step discipline the engine re-poses every body with <c>setGlobalPose</c> at the
+    /// top of every step, which invalidates PhysX's contact cache, so nothing carries across
+    /// a restore and <c>restore + step</c> is already a pure function of the restored state
+    /// (verified in <c>PxwOffsetShapeRepro</c> Stage G across seven hostile histories). There
+    /// is therefore no residue for a reset to remove.
     /// <para>
-    /// Measured over a 30 tick replay of a contact-heavy stack:
-    /// <c>None</c> 1.8e-06 m, <c>ResetFiltering</c> 1.4e-02 m, <c>Reinsert</c> 9.8e-02 m.
+    /// Resetting on <i>every</i> restore is in fact harmful: under variable-depth rollback
+    /// two peers rewind by different amounts and so would call the reset a different number
+    /// of times, and the reset's own side effects on scene, broadphase and island bookkeeping
+    /// are not invariant across that. It was tried and it desynced live play.
     /// </para>
-    /// <see cref="None"/> is therefore the correct default by four orders of magnitude.
-    /// The other modes exist for a hard resynchronisation, where the goal is to discard
-    /// history rather than preserve it.
+    /// <para>
+    /// These modes exist only as a deliberate, one-shot <b>hard resynchronisation</b> tool
+    /// (see <see cref="UNDPWR.Core.DeterministicWorld.ResetContactState"/>) for the case where
+    /// discarding history is the explicit intent. <see cref="None"/> is the default and the
+    /// only value the rollback path uses.
+    /// </para>
     /// </remarks>
     public enum SimContactResetMode : uint
     {
@@ -379,7 +383,8 @@ namespace UNDPWR.Interop
 
         /// <summary>
         /// Non-zero when the tensor was within the isotropy tolerance and the mass frame
-        /// was collapsed to the identity.
+        /// was collapsed to the identity. A near-origin centre of mass is snapped to the
+        /// actor origin in that case as well, so the whole mass frame is peer-identical.
         /// </summary>
         public uint MassFrameCollapsed;
     }

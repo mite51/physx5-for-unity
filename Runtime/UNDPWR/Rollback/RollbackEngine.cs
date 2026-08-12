@@ -592,6 +592,17 @@ namespace UNDPWR.Rollback
                     tick, _snapshots.OldestTick, _config.SnapshotHistory));
             }
 
+            // Just reinstate the snapshot. No contact-state reset is needed or wanted here:
+            // the cold-step discipline re-poses every body with setGlobalPose at the top of
+            // each step, which invalidates PhysX's contact cache, so there is no carried
+            // warm-start residue left to diverge -- restore + step is a pure function of the
+            // restored state. This was verified in isolation (PxwOffsetShapeRepro Stage G:
+            // restore + step stays bit-identical across seven deliberately hostile histories,
+            // for the plain sphere, the compound ball, and a pooled world). Resetting contacts
+            // on every restore was tried and is actively harmful under variable-depth rollback,
+            // where peers rewind by different amounts and so would reset a different number of
+            // times; see DeterministicWorld.ResetContactState, which remains only as a manual
+            // hard-resynchronisation tool.
             _world.RestoreState(snapshot.Data, snapshot.Size);
             RestoreManagedFrom(snapshot);
         }
@@ -735,6 +746,75 @@ namespace UNDPWR.Rollback
 
             // The ring reuses these buffers, so hand back copies that own their bytes.
             state = raw.Compact();
+            return true;
+        }
+
+        /// <summary>
+        /// Produces a finalized rebuild for a roster change and leaves the producing peer on
+        /// the exact same restore path as every receiver.
+        /// </summary>
+        /// <remarks>
+        /// A roster change usually needs two states: the current confirmed state is restored
+        /// under the new player set, then <paramref name="reconcile"/> activates or retires
+        /// pooled bodies and that result becomes the payload sent to the other peers. Merely
+        /// capturing that result is not enough. The producer performed the reconcile's native
+        /// enable/disable transitions, while a receiver restores an already-final payload and
+        /// its reconcile is idempotent. PhysX keeps scene and island bookkeeping that is not in
+        /// the snapshot, so those two histories can later solve a shared contact island
+        /// differently even though the captured bytes agree.
+        /// <para>
+        /// This method owns the complete producer protocol: capture the old confirmed state,
+        /// apply it with the target roster, reconcile, capture the finalized payload, then
+        /// apply that finalized payload once more on the producer. The returned state is the
+        /// same state the producer consumed and is safe to serialize. Samples should use this
+        /// instead of composing <see cref="CaptureRebuildState"/> and
+        /// <see cref="PrepareForRebuild(ref SimRebuildState, Action, bool)"/> themselves.
+        /// </para>
+        /// The caller's gameplay roster must already describe <paramref name="playerIds"/>
+        /// when this method is entered, because the reconcile callback normally reads it.
+        /// The callback must be idempotent, as required by <c>PrepareForRebuild</c>.
+        /// </remarks>
+        /// <param name="playerIds">The complete player set after the rebuild.</param>
+        /// <param name="reconcile">
+        /// Brings managed entities and pooled native bodies into line with the target roster.
+        /// </param>
+        /// <param name="state">The finalized, self-owned payload to broadcast.</param>
+        /// <param name="recreateWorld">
+        /// Whether each apply recreates the native world. Keep the default for networked play.
+        /// </param>
+        /// <returns>False only when the current confirmed snapshot is unavailable.</returns>
+        public bool TryProduceRebuildState(IList<uint> playerIds, Action reconcile,
+            out SimRebuildState state, bool recreateWorld = true)
+        {
+            if (playerIds == null)
+            {
+                throw new ArgumentNullException("playerIds");
+            }
+
+            SimRebuildState seed;
+            if (!CaptureRebuildState(_confirmedTick, out seed))
+            {
+                state = new SimRebuildState();
+                return false;
+            }
+
+            seed.PlayerIds = new uint[playerIds.Count];
+            for (int i = 0; i < playerIds.Count; ++i)
+            {
+                seed.PlayerIds[i] = playerIds[i];
+            }
+            Array.Sort(seed.PlayerIds);
+
+            // First apply produces the desired final state from the old confirmed state.
+            PrepareForRebuild(ref seed, reconcile, recreateWorld);
+            if (!CaptureRebuildState(_confirmedTick, out state))
+            {
+                return false;
+            }
+
+            // Then consume exactly what receivers consume. This second apply is the invariant
+            // that cannot safely be left to each sample's rebuild orchestration.
+            PrepareForRebuild(ref state, reconcile, recreateWorld);
             return true;
         }
 

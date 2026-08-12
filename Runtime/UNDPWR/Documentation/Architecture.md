@@ -309,8 +309,11 @@ measurements say so plainly. Over a 30-tick replay of a contact-heavy stack:
 | `Reinsert` | 9.8e-02 m | 2.1e-01 m/s |
 
 Clearing discards warm-start data the original tick actually had, so the replay ends up
-*further* from the truth. `None` is the default by four orders of magnitude. The other
-modes exist for hard resynchronisation, where discarding history is the entire point.
+*further* from the truth — by four orders of magnitude. The rollback path therefore never
+clears; it always behaves as `None`. The other `SimContactResetMode` values exist only as a
+manual hard-resynchronisation tool (`DeterministicWorld.ResetContactState`), where discarding
+history is the entire point. (There is no per-restore config knob; clearing on every restore
+was tried and is harmful under variable-depth rollback.)
 
 There is also nothing left for them to do. Restoring a pose invalidates that actor's cached
 contact data as a side effect, so every restore already cools the cache — which is the

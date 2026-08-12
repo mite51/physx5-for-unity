@@ -222,6 +222,12 @@ namespace UNDPWR.Interop
         internal static extern ulong PxwWorldHashInternalIds(IntPtr world);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern ulong PxwWorldHashConstruction(IntPtr world);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern unsafe uint PxwWorldHashConstructionPerEntry(IntPtr world, SimEntryHash* dst, uint capacity);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern unsafe ulong PxwHashBuffer(void* src, uint size);
     }
 }

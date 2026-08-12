@@ -20,7 +20,7 @@ namespace UNDPWR.Core
     /// an amplification of about eighty. Two peers building that body from inputs that
     /// differ in the last bit end up simulating measurably different objects.</para>
     ///
-    /// <para>Three things make it safe, all applied by <see cref="Compute"/>:</para>
+    /// <para>Four things make it safe, all applied by <see cref="Compute"/>:</para>
     /// <list type="bullet">
     /// <item><description>Shape contributions are sorted into a canonical order before
     /// summing, so the result does not depend on attachment order. Reversing attachment
@@ -29,13 +29,22 @@ namespace UNDPWR.Core
     /// identity rather than storing an arbitrary rotation, which removes the
     /// amplification entirely and, as a bonus, keeps the actor pose round trip
     /// lossless.</description></item>
+    /// <item><description>In that same collapsed case, a centre of mass within 0.1% of
+    /// the body's radius of gyration is snapped to the actor origin. Collapsing the
+    /// frame alone was not enough: a near-sphere's summed centre of mass is still a
+    /// last-bit-different quantity across peers, and that alone desyncs a body the moment
+    /// it shares a solver island. With the snap the whole mass frame is peer-identical,
+    /// so <see cref="Setup"/> is safe for a near-spherical compound such as a spiked ball
+    /// without hand-authoring its mass.</description></item>
     /// <item><description>Otherwise the mass frame quaternion is put in a canonical sign,
     /// since a diagonalisation may return either <c>q</c> or <c>-q</c>.</description></item>
     /// </list>
     ///
-    /// <para>Even with all three, the safest pattern is to compute once and replicate.
-    /// <see cref="Hash"/> exists so a peer that computed something different is caught at
-    /// session join rather than diagnosed from a desync twenty seconds later.</para>
+    /// <para>For a strongly anisotropic body, whose principal axes are kept exact, or for
+    /// one assembled at runtime from data that might differ between peers, the safest
+    /// pattern is still to compute once and replicate. <see cref="Hash"/> exists so a peer
+    /// that computed something different is caught at session join rather than diagnosed
+    /// from a desync twenty seconds later.</para>
     /// </remarks>
     public static class SimMass
     {
@@ -87,8 +96,12 @@ namespace UNDPWR.Core
         /// </summary>
         /// <remarks>
         /// Safe when every peer runs it against an identical body, which is the case for
-        /// authored content loaded from the same asset. For anything assembled at runtime
-        /// from data that might differ, compute on one peer and replicate the result.
+        /// authored content loaded from the same asset. Thanks to the frame collapse and
+        /// centre-of-mass snap described on <see cref="SimMass"/>, this now includes a
+        /// near-spherical compound such as a spiked ball, which no longer needs its mass
+        /// hand-authored. For anything assembled at runtime from data that might differ
+        /// between peers, or a strongly anisotropic body, compute on one peer and
+        /// replicate the result.
         /// </remarks>
         public static SimMassProperties Setup(IntPtr actorHandle, float density,
             float isotropyTolerance = -1.0f, bool includeNonSimShapes = false)

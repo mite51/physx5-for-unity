@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using NUnit.Framework;
+using PhysX5ForUnity;
 using UNDPWR.Core;
 using UNDPWR.Diagnostics;
 using UNDPWR.Interop;
@@ -32,6 +33,58 @@ namespace UNDPWR.Tests
         public void Restore()
         {
             SimLog.Level = _savedLevel;
+        }
+
+        [Test]
+        public void DetachNativeSinkClearsPointerAfterManagedStateWasReset()
+        {
+            int nativeMessages = 0;
+            IntPtr firstMaterial = IntPtr.Zero;
+            IntPtr secondMaterial = IntPtr.Zero;
+            Action<SimLog.Verbosity, string> listener = delegate(SimLog.Verbosity level, string message)
+            {
+                if (message.Contains("Create rigid material"))
+                {
+                    nativeMessages += 1;
+                }
+            };
+
+            try
+            {
+                SimLog.Level = SimLog.Verbosity.Info;
+                SimLog.MessageLogged += listener;
+                SimLog.AttachNativeSink();
+
+                firstMaterial = Physx.CreatePxMaterial(0.5f, 0.5f, 0.0f);
+                Assert.Greater(nativeMessages, 0, "the native callback was not installed");
+
+                // Emulate a Unity domain reload: managed statics reset while the native DLL
+                // remains loaded and still owns the old function pointer.
+                System.Reflection.FieldInfo callbackField = typeof(SimLog).GetField(
+                    "_nativeCallback",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                Assert.IsNotNull(callbackField);
+                callbackField.SetValue(null, null);
+
+                nativeMessages = 0;
+                SimLog.DetachNativeSink();
+                secondMaterial = Physx.CreatePxMaterial(0.5f, 0.5f, 0.0f);
+                Assert.AreEqual(0, nativeMessages,
+                    "DetachNativeSink left the stale callback installed in the native DLL");
+            }
+            finally
+            {
+                SimLog.DetachNativeSink();
+                SimLog.MessageLogged -= listener;
+                if (firstMaterial != IntPtr.Zero)
+                {
+                    Physx.ReleasePxMaterial(firstMaterial);
+                }
+                if (secondMaterial != IntPtr.Zero)
+                {
+                    Physx.ReleasePxMaterial(secondMaterial);
+                }
+            }
         }
 
         // ------------------------------------------------------------ wire codec ----

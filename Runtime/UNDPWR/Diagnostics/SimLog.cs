@@ -72,6 +72,19 @@ namespace UNDPWR.Diagnostics
         private static NativeMethods.LogCallback _nativeCallback;
 
         /// <summary>
+        /// Clears any callback pointer retained by the native DLL from an earlier managed
+        /// domain. Native plugins survive Unity domain reloads; managed delegates do not.
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetNativeSink()
+        {
+            // Do not use the managed field as the source of truth here. After a domain reload it
+            // is null even though the native DLL may still hold the old function pointer.
+            NativeMethods.PxwSetLogCallback(null);
+            _nativeCallback = null;
+        }
+
+        /// <summary>
         /// Routes native diagnostics through this logger.
         /// </summary>
         /// <remarks>
@@ -88,17 +101,24 @@ namespace UNDPWR.Diagnostics
             }
             _nativeCallback = OnNativeMessage;
             NativeMethods.PxwSetLogCallback(_nativeCallback);
+#if UNITY_EDITOR
+            // Clear the native function pointer before Unity invalidates this delegate.
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload -= DetachNativeSink;
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload += DetachNativeSink;
+#endif
         }
 
         /// <summary>Stops routing native diagnostics. Safe to call when not attached.</summary>
         public static void DetachNativeSink()
         {
-            if (_nativeCallback == null)
-            {
-                return;
-            }
+            // Always clear the native slot. Unity can reload the managed domain while leaving
+            // the DLL loaded, in which case this field has reset to null but the DLL still owns
+            // a pointer to the delegate from the previous domain.
             NativeMethods.PxwSetLogCallback(null);
             _nativeCallback = null;
+#if UNITY_EDITOR
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload -= DetachNativeSink;
+#endif
         }
 
         [AOT.MonoPInvokeCallback(typeof(NativeMethods.LogCallback))]

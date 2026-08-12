@@ -63,6 +63,7 @@ namespace UNDPWR.Core
         private SimPoseEntry[] _poseScratch = new SimPoseEntry[0];
         private SimEntryHash[] _hashScratch = new SimEntryHash[0];
         private SimInternalIdEntry[] _internalIdScratch = new SimInternalIdEntry[0];
+        private SimEntryHash[] _constructionScratch = new SimEntryHash[0];
 
         /// <summary>The configuration this world was created with.</summary>
         public SimConfig Config { get { return _config; } }
@@ -423,13 +424,17 @@ namespace UNDPWR.Core
         }
 
         /// <summary>
-        /// Discards the simulation state PhysX carries between steps.
+        /// Discards the simulation state PhysX carries between steps. A manual
+        /// hard-resynchronisation tool only.
         /// </summary>
         /// <remarks>
-        /// Not part of a normal rollback. Measurements show that wiping the contact
-        /// caches makes a replay four orders of magnitude less accurate, because it
-        /// throws away warm-start data the original tick actually had. Reserve it for a
-        /// hard resynchronisation, where discarding history is the point.
+        /// The rollback path never calls this: the cold-step discipline re-poses every body
+        /// each step, which invalidates PhysX's contact cache, so restore + step is already
+        /// a pure function of the restored state and there is no residue to remove. Calling
+        /// this on every restore is actively harmful under variable-depth rollback, because
+        /// peers rewind by different amounts and would reset a different number of times.
+        /// Reserve it for a deliberate, one-shot hard resynchronisation, where discarding
+        /// history is the explicit intent.
         /// </remarks>
         public void ResetContactState(SimContactResetMode mode)
         {
@@ -698,6 +703,130 @@ namespace UNDPWR.Core
                         local[i].StableId,
                         local[i].InternalActorIndex, peer[i].InternalActorIndex,
                         local[i].IslandNodeIndex, peer[i].IslandNodeIndex);
+                    return false;
+                }
+            }
+
+            problem = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Hashes how every registered body was built, as opposed to what state it is in.
+        /// </summary>
+        /// <remarks>
+        /// Covers shape count and attachment order, each shape's geometry, local pose,
+        /// contact and rest offsets, flags, filter data and material coefficients, and each
+        /// body's mass properties, damping, velocity and depenetration clamps, solver
+        /// iteration counts and thresholds.
+        /// <para>
+        /// None of that appears in a snapshot, in <see cref="CaptureState"/>'s hash or in
+        /// <see cref="HashPerEntry"/>, because none of it changes as the simulation runs --
+        /// and all of it is read by every solve. Two peers that construct the same entity
+        /// differently therefore agree on every number the session exchanges and still
+        /// diverge, with an unbounded delay between the cause and the symptom: the
+        /// difference does nothing at all until the body is loaded hard enough for it to
+        /// matter, and then the desync looks like anything but a construction bug.
+        /// </para>
+        /// <para>
+        /// Peers exchange this once after the world is built and again after a rebuild. It
+        /// matters most for compounds of offset shapes: a ball built from a core sphere and
+        /// two dozen offset spikes has twenty-five geometries, local poses and material
+        /// bindings that all have to match, and because a near-isotropic compound's mass is
+        /// deliberately canonicalised (see <see cref="SimMass.Setup"/>) its mass hash is
+        /// specifically designed not to reflect small shape differences. A single ULP in one
+        /// spike's local pose leaves the mass hash and the state hash identical, and desyncs
+        /// the ball within a couple of seconds of it being squeezed between two other
+        /// bodies. Use <see cref="CompareConstruction"/> to find out which body differs.
+        /// </para>
+        /// </remarks>
+        public ulong HashConstruction()
+        {
+            ThrowIfDisposed();
+            return NativeMethods.PxwWorldHashConstruction(_world);
+        }
+
+        /// <summary>
+        /// Reads the per-body construction hashes, in stable-ID order.
+        /// </summary>
+        /// <param name="count">How many of the returned entries are meaningful.</param>
+        /// <returns>
+        /// A buffer reused between calls; copy anything that must outlive the next call.
+        /// </returns>
+        public unsafe SimEntryHash[] ReadConstructionHashes(out int count)
+        {
+            ThrowIfDisposed();
+
+            int capacity = (int)NativeMethods.PxwWorldGetEntryCount(_world);
+            if (_constructionScratch.Length < capacity)
+            {
+                _constructionScratch = new SimEntryHash[capacity];
+            }
+
+            fixed (SimEntryHash* dst = _constructionScratch)
+            {
+                count = (int)NativeMethods.PxwWorldHashConstructionPerEntry(
+                    _world, dst, (uint)_constructionScratch.Length);
+            }
+            return _constructionScratch;
+        }
+
+        /// <summary>
+        /// Compares how this peer built its bodies against how another peer built theirs,
+        /// and describes the first disagreement.
+        /// </summary>
+        /// <param name="peer">
+        /// Records from another peer, as produced by <see cref="ReadConstructionHashes"/>.
+        /// </param>
+        /// <param name="peerCount">How many of <paramref name="peer"/> are meaningful.</param>
+        /// <param name="problem">
+        /// A description of the disagreement, or <c>null</c> when the two peers built the
+        /// same bodies.
+        /// </param>
+        /// <returns><c>true</c> when the two peers agree.</returns>
+        public unsafe bool CompareConstruction(SimEntryHash[] peer, int peerCount, out string problem)
+        {
+            ThrowIfDisposed();
+
+            if (peer == null)
+            {
+                throw new ArgumentNullException("peer");
+            }
+
+            int localCount;
+            SimEntryHash[] local = ReadConstructionHashes(out localCount);
+
+            if (localCount != peerCount)
+            {
+                problem = string.Format(
+                    "Peers registered different numbers of bodies: {0} locally, {1} remotely. " +
+                    "Every peer must register the same set of entities before stepping.",
+                    localCount, peerCount);
+                return false;
+            }
+
+            for (int i = 0; i < localCount; i++)
+            {
+                if (local[i].StableId != peer[i].StableId)
+                {
+                    problem = string.Format(
+                        "Registration order differs at position {0}: this peer has stable ID {1}, " +
+                        "the other has {2}. Entities must be committed in ascending stable-ID order.",
+                        i, local[i].StableId, peer[i].StableId);
+                    return false;
+                }
+
+                if (local[i].Hash != peer[i].Hash)
+                {
+                    problem = string.Format(
+                        "Stable ID {0} was built differently on the two peers (construction hash 0x{1:X16} " +
+                        "vs 0x{2:X16}). The shapes, their local poses or offsets, the materials, the mass, " +
+                        "the solver iteration counts or the depenetration clamp differ. Every peer must " +
+                        "build this entity from identical values; note that a compound of offset shapes has " +
+                        "one geometry, local pose and material per shape to get right, and that a one-ULP " +
+                        "difference in any of them is enough to desync the body once it is squeezed between " +
+                        "two others while leaving it in perfect agreement until then.",
+                        local[i].StableId, local[i].Hash, peer[i].Hash);
                     return false;
                 }
             }
