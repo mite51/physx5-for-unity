@@ -1,53 +1,35 @@
-# UNDPWR documentation
+# UNDPWR manual
 
-| document | what it covers |
+**Unity Networked Deterministic Physics With Rollback** — rollback netcode for PhysX 5 in
+Unity. Peers exchange only inputs and recompute the physics identically, so bandwidth stays
+flat as the scene grows. The [package README](../README.md) is the short version and the quick
+start; this is the full guide.
+
+## Chapters
+
+| Chapter | What it covers |
 | --- | --- |
-| [Architecture.md](Architecture.md) | How the framework is built: layers, identity, state and snapshots, the tick lifecycle, input flow, data ownership, join and resync, extension points, failure modes. **Read this first.** |
-| [Gameplay.md](Gameplay.md) | The gameplay layer over the engine: the three state channels, entities and pooling, actions, game modes and the game host, players and camera-relative input, presentation. Where to start once physics rolls back and you want a game on top of it. |
-| [NativeGameplayApi.md](NativeGameplayApi.md) | The forces, scene queries and contact/trigger buffer the gameplay layer needs from the native plugin, with the deterministic sort-order requirements. The contract the managed side already compiles against. |
-| [CrossPlatformDeterminism.md](CrossPlatformDeterminism.md) | Why peers must share a CPU architecture today, what specifically breaks between ARM and x86, what it would take to change, and how to test it cheaply. |
+| [Getting started](GettingStarted.md) | Prerequisites, the two assemblies, the fixed-update contract, and building up from a local loop to a networked game. Start here. |
+| [Concepts](Concepts.md) | What rollback is doing and why: the governing rule, cold steps, why PGS, the free-running clock, the latency knobs, the three state channels, stable IDs. |
+| [World and actors](WorldAndActors.md) | `DeterministicWorld`, stable IDs, deferred stable-ID-ordered registration, the Unity actor bridge, mass, enabling vs unregistering. The #1 desync source. |
+| [Rollback and input](RollbackAndInput.md) | The step handler, the tick lifecycle, and how to submit input without stalling. |
+| [The gameplay layer](Gameplay.md) | Entities, pooling, actions, game modes, the game host's fixed tick order, players and camera-relative input, presentation. The recommended way to build a game. |
+| [Networking](Networking.md) | The `ISimTransport` seam, the session loop, the handshake, desync detection, and mid-match join. |
+| [Simulation APIs](SimulationAPIs.md) | Forces (`SimBody`), scene queries (`SimQuery`), and contact/trigger events (`SimContacts`), and their determinism rules. |
+| [Vehicles and articulations](VehiclesAndArticulations.md) | Handle kinds and registering non-rigid bodies; vehicle commands as input. |
+| [Configuration](Configuration.md) | Every `SimConfig` field, hashed vs peer-local, the PGS requirement, sleeping, the GPU backend. |
+| [Limits and platforms](LimitsAndPlatforms.md) | The same-architecture requirement, contact/wake bit-exactness caveats, chain depth, GPU, the PhysX patch dependency. |
+| [Troubleshooting](Troubleshooting.md) | Symptom-to-cause tables for desyncs and stalls, and the classic mistakes. |
 
-The [package README](../README.md) is the short version: the governing rule, the measurements
-behind it, and a usage sketch. [CHANGELOG.md](../CHANGELOG.md) records what has landed and each
-change to the config hash and native `kStateVersion` that peers must agree on.
+## Reading paths
 
-## Active investigation
+- **Integrate a game** → [Getting started](GettingStarted.md) → [World and actors](WorldAndActors.md) → [The gameplay layer](Gameplay.md) → [Networking](Networking.md)
+- **Tune latency / understand rollback** → [Concepts](Concepts.md) → [Rollback and input](RollbackAndInput.md) → [Configuration](Configuration.md)
+- **Fix a desync or a stall** → [Troubleshooting](Troubleshooting.md) → [Limits and platforms](LimitsAndPlatforms.md)
+- **Historical design notes** → [Archive](Archive/) (background and measurements, not maintained — do not start here)
 
-[DeterminismInvestigation.md](DeterminismInvestigation.md) is the live working document for
-bitwise determinism under rollback: what has been measured, what changed, which conclusions
-turned out to be wrong, and what is still open. `Architecture.md` has been brought back in
-line with it; where the two disagree, the investigation is newer.
+## Interop and versioning
 
-Read its §5 before proposing a theory. Five plausible ones have already been measured and
-killed, and the fifth was very nearly killed while being correct.
-
-[AdaptiveRollbackPlan.md](AdaptiveRollbackPlan.md) is the route, now fully travelled, from the
-fixed prediction horizon to rollback that fires only when something is wrong and only as deep
-as the correction requires. It turned on one question — whether the framework can run PGS
-instead of TGS — which came back yes, so the horizon was removed and PGS is now required.
-
-## Where to start
-
-**Using the framework** — package README, then Architecture §10 (where your game plugs in)
-and §11 (presentation).
-
-**Changing the framework** — Architecture §2 first. Most of the design is shaped by one
-constraint that is not visible from the code, and changes that look harmless tend to violate
-it.
-
-**Diagnosing a desync** — Architecture §15 (failure-mode table), then §5.4 for per-entity
-hashing.
-
-**Considering mobile or console** — CrossPlatformDeterminism.md, including the desktop
-Intel-versus-AMD test that is worth running regardless.
-
-## Where the numbers come from
-
-Every measurement quoted across these documents is produced by `tests/PxwRollbackRepro.cpp`,
-`tests/PxwUndpwrTests.cpp` and `tests/PxwPoseRoundTripTests.cpp` in the native plugin
-repository. They are characterisation tests as much as regression tests: they exist so the
-limits stay documented rather than being rediscovered.
-
-`PxwRollbackRepro` prints `yes`/`no` lines alongside its pass/fail ones. A `no` is a
-deliberately recorded limit, not a broken test — the suite is green at 22 checks, 0
-failures, and the `no` lines are the subject matter.
+[CHANGELOG.md](../CHANGELOG.md) records what has landed and each change to the two numbers peers
+must agree on: the managed config hash (`SimConfig.ComputeHash`) and the native snapshot format
+(`kStateVersion`). Two peers interoperate only when both match.

@@ -93,6 +93,37 @@ namespace UNDPWR.Core
             get { return _world == IntPtr.Zero ? IntPtr.Zero : NativeMethods.PxwWorldGetScene(_world); }
         }
 
+        /// <summary>
+        /// Whether the scene is actually running GPU rigid-body dynamics, as opposed to
+        /// having merely been asked to.
+        /// </summary>
+        /// <remarks>
+        /// A world built with <see cref="SimBackendMode.GpuExperimental"/> silently falls
+        /// back to CPU when the native plugin has no CUDA context (a CPU-only plugin build,
+        /// or no usable GPU), so <see cref="SimConfig.Backend"/> records the request while
+        /// this reads what the scene became. False on an older native DLL that predates the
+        /// query, which is treated as "not GPU" rather than allowed to throw.
+        /// </remarks>
+        public bool IsGpuDynamicsActive
+        {
+            get
+            {
+                if (_world == IntPtr.Zero)
+                {
+                    return false;
+                }
+                try
+                {
+                    return NativeMethods.PxwWorldIsGpuDynamicsEnabled(_world) != 0u;
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    // A plugin built before this query existed. Report CPU rather than fail.
+                    return false;
+                }
+            }
+        }
+
         /// <summary>How many entries the registry holds, committed and pending.</summary>
         public int EntityCount { get { return _entities.Count; } }
 

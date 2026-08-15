@@ -160,6 +160,9 @@ namespace UNDPWR.Interop
         internal static extern IntPtr PxwWorldGetScene(IntPtr world);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern uint PxwWorldIsGpuDynamicsEnabled(IntPtr world);
+
+        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int PxwWorldRegister(IntPtr world, uint stableId, IntPtr handle, uint kind);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
