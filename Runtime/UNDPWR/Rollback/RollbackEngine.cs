@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UNDPWR.Core;
 using UNDPWR.Diagnostics;
 using UNDPWR.Interop;
+using UNDPWR.Net;
 
 namespace UNDPWR.Rollback
 {
@@ -45,8 +46,8 @@ namespace UNDPWR.Rollback
     /// turns out to be wrong.
     /// </summary>
     /// <remarks>
-    /// <b>What the engine rests on.</b> Only the confirmed timeline is compared between
-    /// peers, and it is advanced by a cold restore-and-step per tick. Under PGS that is
+    /// <b>What the engine rests on.</b> Clients compare only their confirmed timeline against
+    /// the authoritative server, and advance it by a cold restore-and-step per tick. Under PGS that is
     /// bitwise transparent -- <c>restore(S); step()</c> is a pure function of <c>S</c> -- so
     /// however far each peer rewound or led, its confirmed hash for a tick is the same as
     /// everyone else's. That is why the clock can run free and the rewind depth can follow
@@ -56,9 +57,8 @@ namespace UNDPWR.Rollback
     /// explanation is the wrong one. A rewind is not lossy: two worlds driven along
     /// deliberately different histories agree bit-for-bit from the moment they are handed
     /// the same snapshot. Under PGS the cold-step discipline below makes replay bitwise
-    /// transparent outright, and peers rewinding by four and by sixteen land on identical
-    /// state. The framework's confirmed timeline uses PGS for exactly this reason;
-    /// <see cref="SimConfig.Validate"/> refuses any other solver, because TGS carries
+    /// transparent outright, and clients rewinding by four and by sixteen land on identical
+    /// state. The framework fixes PGS for exactly this reason: TGS carries
     /// per-substep state that a restore does not reach and a data-dependent rewind under it
     /// diverges by a residual that is invisible once and fatal several hundred frames later.
     /// Documentation/DeterminismInvestigation.md section 8 records the measurements.</para>
@@ -67,10 +67,10 @@ namespace UNDPWR.Rollback
     /// <list type="number">
     /// <item><description>drain whatever the confirmed frontier reached into the confirmed
     /// timeline, one cold restore-and-step per tick, capturing each;</description></item>
-    /// <item><description>advance the free-running clock one tick of wall time, unless it
+    /// <item><description>advance the wall-clock target one tick, unless it
     /// would outrun what <see cref="SnapshotRing"/> can retain;</description></item>
     /// <item><description>resimulate the prediction window, but only from the earliest tick a
-    /// misprediction or a new confirmation disturbed.</description></item>
+    /// misprediction or new confirmation disturbed, within the per-frame step budget.</description></item>
     /// </list>
     /// <para>The lead over the confirmed tick is emergent -- it grows when confirmations lag
     /// and shrinks as they arrive -- so a peer never predicts a shared, fixed number of ticks
@@ -86,14 +86,20 @@ namespace UNDPWR.Rollback
     {
         private readonly DeterministicWorld _world;
         private readonly SimConfig _config;
+        private readonly SimNetConfig _netConfig;
         private InputBuffer _inputs;
         private readonly SnapshotRing _snapshots;
         private readonly List<ISimStepHandler> _handlers = new List<ISimStepHandler>();
+        private readonly List<ISimAuthoritativeEventHandler> _eventHandlers =
+            new List<ISimAuthoritativeEventHandler>();
+        private readonly SimAuthoritativeEventBuffer _events;
         private ISimStateProvider _stateProvider;
 
         private int _confirmedTick = -1;
         private int _currentTick = -1;
+        private int _targetTick = -1;
         private bool _stalled;
+        private string _hardResyncReason;
 
         // Per-entity hashes for recent confirmed ticks, parallel to the snapshot ring and
         // allocated only when the diagnostic is asked for. Null when it is off.
@@ -112,35 +118,32 @@ namespace UNDPWR.Rollback
         /// <summary>The newest tick simulated, confirmed or predicted.</summary>
         public int CurrentTick { get { return _currentTick; } }
 
-        /// <summary>
-        /// The tick a local input sampled right now should be stamped for.
-        /// </summary>
-        /// <remarks>
-        /// Tracks <see cref="CurrentTick"/> plus <see cref="SimConfig.LocalInputDelay"/>. Build
-        /// local input against this rather than against <see cref="CurrentTick"/>: a tick
-        /// stamped further ahead reaches the other peers before they have to guess at it,
-        /// which is the difference between a remote player who moves and one who moves and
-        /// then snaps somewhere else.
-        /// <para>
-        /// Submit a <em>run</em> of ticks against this, never just this one. Every tick from
-        /// the last one submitted through this value has to be covered, because
-        /// <see cref="InputBuffer.ConfirmedThrough"/> needs an unbroken run: one missing tick
-        /// is fatal rather than untidy, since the frontier stops at it permanently and the peer
-        /// stalls for good once the clock reaches its bound, with input appearing to do nothing
-        /// at all. Two things skip ticks here and neither is avoidable by stamping more
-        /// carefully. Nothing covers the <see cref="SimConfig.LocalInputDelay"/> ticks between
-        /// the tick a session starts at and the first tick it stamps for, which is why the
-        /// first submitted run has to start at <see cref="CurrentTick"/> and cover the whole
-        /// span up to this value rather than stamping a single tick.
-        /// </para>
-        /// <para>
-        /// <see cref="UNDPWR.Net.SimSession.SubmitLocalInput"/> fills the run for you. A caller
-        /// driving this engine directly has to loop it itself, from the tick after the last one
-        /// it submitted — starting at <see cref="CurrentTick"/> for a fresh session, and at the
-        /// resume tick after every <see cref="PrepareForRebuild"/>.
-        /// </para>
-        /// </remarks>
-        public int LocalInputTick { get { return _currentTick + _config.LocalInputDelay; } }
+        /// <summary>The wall-clock tick the engine is working toward.</summary>
+        public int TargetTick { get { return _targetTick; } }
+
+        /// <summary>Ticks still required to reach the wall-clock target.</summary>
+        public int CatchUpBacklog { get { return Math.Max(0, _targetTick - _currentTick); } }
+
+        /// <summary>True while budgeted replay or forward simulation remains.</summary>
+        public bool IsCatchingUp { get { return CatchUpBacklog > 0 || _pendingReplayFrom <= _currentTick; } }
+
+        /// <summary>True when backlog reached the configured soft warning threshold.</summary>
+        public bool IsCatchUpWarning
+        {
+            get { return CatchUpBacklog >= _netConfig.CatchUpWarningTicks; }
+        }
+
+        /// <summary>True when the most recent advance used its complete simulation-step budget.</summary>
+        public bool BudgetExhausted { get; private set; }
+
+        /// <summary>True when local history can no longer recover the authoritative timeline.</summary>
+        public bool NeedsHardResync { get { return _hardResyncReason != null; } }
+
+        /// <summary>Why a server snapshot is required, or null while locally recoverable.</summary>
+        public string HardResyncReason { get { return _hardResyncReason; } }
+
+        /// <summary>Raised once when the engine first requires an authoritative rebuild.</summary>
+        public event Action<string> HardResyncRequired;
 
         /// <summary>
         /// True when the peer is waiting for inputs rather than advancing.
@@ -160,9 +163,9 @@ namespace UNDPWR.Rollback
         /// Emergent rather than a shared constant: it grows when confirmations lag and shrinks
         /// as they arrive, bounded by <see cref="SimConfig.SnapshotHistory"/>. A policy that
         /// wants Overwatch-style adaptation tunes the peer-local
-        /// <see cref="SimConfig.LocalInputDelay"/> from watching it.
+        /// <see cref="SimAdaptiveInputLead"/> from authoritative latency telemetry.
         /// </remarks>
-        public int CurrentLead { get { return _currentTick - _confirmedTick; } }
+        public int CurrentLead { get { return _targetTick - _confirmedTick; } }
 
         /// <summary>How many ticks were resimulated on the most recent advance.</summary>
         public int LastReplayLength { get; private set; }
@@ -170,28 +173,54 @@ namespace UNDPWR.Rollback
         /// <summary>Total ticks resimulated since the session started, for profiling.</summary>
         public long TotalReplayedTicks { get; private set; }
 
+        /// <summary>Authoritative/speculative command changes that dirtied an already simulated tick.</summary>
+        public long TotalMispredictions { get; private set; }
+
+        /// <summary>Total confirmed, replayed, and forward steps run by the last advance.</summary>
+        public int LastSimulationSteps { get; private set; }
+
         /// <summary>The snapshot history, for the netcode layer to read hashes from.</summary>
         public SnapshotRing Snapshots { get { return _snapshots; } }
 
         /// <summary>The input buffer this engine predicts from.</summary>
         public InputBuffer Inputs { get { return _inputs; } }
 
+        /// <summary>Hash of every registered body's construction parameters.</summary>
+        public ulong ConstructionHash { get { return _world.HashConstruction(); } }
+
+        /// <summary>Hash of the simulation config this engine actually drives.</summary>
+        public ulong SimulationConfigHash { get { return _config.ComputeHash(); } }
+
+        /// <summary>Hash of the authoritative network policy this engine actually uses.</summary>
+        public ulong NetworkConfigHash { get { return _netConfig.ComputeHash(); } }
+
         /// <summary>
         /// Creates an engine over a world.
         /// </summary>
         /// <param name="world">The world to drive. Must already have its actors committed.</param>
         /// <param name="playerIds">Every player in the session.</param>
-        public RollbackEngine(DeterministicWorld world, IList<uint> playerIds)
+        public RollbackEngine(DeterministicWorld world, IList<uint> playerIds, SimNetConfig netConfig)
         {
             if (world == null)
             {
                 throw new ArgumentNullException("world");
             }
+            if (netConfig == null)
+            {
+                throw new ArgumentNullException("netConfig");
+            }
+            string reason;
+            if (!netConfig.ValidateForEngine(world.Config, out reason))
+            {
+                throw new ArgumentException(reason, "netConfig");
+            }
 
             _world = world;
             _config = world.Config;
+            _netConfig = netConfig;
             _inputs = new InputBuffer(playerIds, _config.SnapshotHistory);
             _snapshots = new SnapshotRing(_config.SnapshotHistory, world.StateSize);
+            _events = new SimAuthoritativeEventBuffer(_config.SnapshotHistory);
 
             if (_config.PerEntityHashDiagnostics)
             {
@@ -224,6 +253,13 @@ namespace UNDPWR.Rollback
         public bool RemoveHandler(ISimStepHandler handler)
         {
             return _handlers.Remove(handler);
+        }
+
+        /// <summary>Registers the deterministic consumer of server-assigned gameplay events.</summary>
+        public void AddEventHandler(ISimAuthoritativeEventHandler handler)
+        {
+            if (handler == null) throw new ArgumentNullException("handler");
+            _eventHandlers.Add(handler);
         }
 
         /// <summary>
@@ -261,9 +297,11 @@ namespace UNDPWR.Rollback
             CaptureManagedInto(slot);
             _snapshots.MarkConfirmedThrough(0);
             CaptureEntityHashes(0);
+            _inputs.ResetAfterConfirmed(0);
 
             _confirmedTick = 0;
             _currentTick = 0;
+            _targetTick = 0;
 
             SimLog.Info(string.Format(
                 "Initialised at tick 0; physics {0} bytes hash 0x{1:X16}, combined hash 0x{2:X16}",
@@ -271,29 +309,98 @@ namespace UNDPWR.Rollback
         }
 
         /// <summary>
-        /// Records a received input, which may make more ticks confirmable.
+        /// Records a locally speculative input proposal.
         /// </summary>
         /// <remarks>
-        /// Takes the local peer's own input as well as everything that arrived over the
-        /// network; the two are the same thing once stamped. Stamp local input with
-        /// <see cref="LocalInputTick"/> rather than <see cref="CurrentTick"/> so it reaches
-        /// the other peers before they guess at it.
+        /// The client session assigns its future server tick from adaptive lead telemetry.
         /// <para>
         /// Note what this deliberately does not do: it does not itself rewind. It records how
         /// far back the next <see cref="Advance"/> has to replay from -- the earliest tick a
         /// misprediction disturbed -- and the rewind happens there.
         /// </para>
         /// </remarks>
-        public void SubmitInput(SimInput input)
+        public void SubmitSpeculativeInput(SimInput input, uint sequence)
         {
-            int mispredictedFrom = _inputs.Submit(input);
+            RecordCorrection(_inputs.SubmitSpeculative(input, sequence));
+        }
 
-            // The return says how far back the next Advance has to replay from: the earliest
-            // tick whose input turned out to differ from the guess. Only the earliest since the
-            // last Advance matters, so keep the minimum.
-            if (mispredictedFrom >= 0 && mispredictedFrom < _pendingReplayFrom)
+        /// <summary>Moves a local speculative command to the tick assigned by the server.</summary>
+        public void RetimeSpeculativeInput(uint playerId, uint sequence, int requestedTick, int assignedTick)
+        {
+            RecordCorrection(_inputs.RetimeSpeculative(playerId, sequence, requestedTick, assignedTick));
+        }
+
+        /// <summary>Removes a local proposal rejected by the server.</summary>
+        public void RejectSpeculativeInput(uint playerId, uint sequence, int requestedTick)
+        {
+            RecordCorrection(_inputs.ClearSpeculative(playerId, sequence, requestedTick));
+        }
+
+        /// <summary>Records every input in one finalized authoritative server frame.</summary>
+        public void SubmitAuthoritativeFrame(SimCanonicalFrame frame)
+        {
+            if (frame == null || frame.Inputs == null)
             {
-                _pendingReplayFrom = mispredictedFrom;
+                throw new ArgumentNullException("frame");
+            }
+            SimInput[] inputs = new SimInput[frame.Inputs.Length];
+            uint[] sequences = new uint[frame.Inputs.Length];
+            for (int i = 0; i < frame.Inputs.Length; ++i)
+            {
+                inputs[i] = frame.Inputs[i].Input;
+                sequences[i] = frame.Inputs[i].Sequence;
+            }
+            RecordCorrection(_inputs.SubmitAuthoritativeFrame(frame.Tick, inputs, sequences));
+        }
+
+        private void RecordCorrection(int tick)
+        {
+            if (tick >= 0)
+            {
+                TotalMispredictions += 1;
+            }
+            RecordDirty(tick);
+        }
+
+        /// <summary>Records an immutable server-assigned deterministic event.</summary>
+        public void SubmitAuthoritativeEvent(SimAuthoritativeEvent command)
+        {
+            if (command.Tick < 0 || command.Payload == null)
+            {
+                throw new ArgumentException("An authoritative event requires a nonnegative tick and payload.");
+            }
+            if (_events.Contains(command.PlayerId, command.Sequence))
+            {
+                return;
+            }
+            if (command.Tick < _snapshots.OldestTick)
+            {
+                RequireHardResync("An authoritative event arrived after its tick left snapshot history.");
+                return;
+            }
+            if (command.Tick <= _confirmedTick)
+            {
+                RequireHardResync(
+                    "An authoritative event arrived after its assigned tick was already confirmed.");
+                return;
+            }
+            if (_events.Submit(command) && command.Tick <= _currentTick)
+            {
+                RecordCorrection(command.Tick);
+            }
+        }
+
+        /// <summary>Copies the complete authoritative event set assigned to one tick.</summary>
+        public SimAuthoritativeEvent[] CopyAuthoritativeEvents(int tick)
+        {
+            return _events.CopyAt(tick);
+        }
+
+        private void RecordDirty(int tick)
+        {
+            if (tick >= 0 && tick < _pendingReplayFrom)
+            {
+                _pendingReplayFrom = tick;
             }
         }
 
@@ -301,78 +408,62 @@ namespace UNDPWR.Rollback
         /// Advances the simulation by one tick of wall time.
         /// </summary>
         /// <remarks>
-        /// Called once per fixed update. The clock advances one tick per call regardless of
-        /// how far confirmation has reached, and the lead over the confirmed tick is whatever
-        /// the network happens to allow. The only hard stop is running further ahead than
-        /// <see cref="SnapshotRing"/> can retain: a lead of
-        /// <c>SnapshotHistory - LocalInputDelay - 1</c> is the most that leaves room for both
-        /// the retained window and local input stamped ahead, and the peer stalls rather than
-        /// outrunning it.
+        /// Called once per fixed update. The target advances one tick per call while retained
+        /// history can cover the configured maximum input lead. Confirmed drain, replay and
+        /// catch-up together consume at most <see cref="SimNetConfig.MaxSimulationStepsPerFrame"/>
+        /// complete ticks.
         /// <para>
-        /// Peers run different-length prediction windows every frame, which only lands on
-        /// agreeing confirmed state because replay is bitwise transparent under PGS and the
-        /// confirmed timeline is advanced by the same cold restore-and-step regardless of
-        /// window width. <see cref="SimConfig.Validate"/> refuses any other solver.
+        /// Clients run different-length prediction windows, but agree with server-confirmed
+        /// state because replay is bitwise transparent under the fixed PGS solver.
         /// </para>
         /// </remarks>
         /// <returns>False when the peer is stalled waiting for inputs.</returns>
         public bool Advance()
         {
-            int nextTick = _currentTick + 1;
-
-            // Confirmation may not run the clock past wall time. AdvanceConfirmed drags the
-            // clock up to whatever it confirms, and local input is stamped LocalInputDelay
-            // ticks ahead, so a peer whose own input is the last one a tick is waiting for --
-            // a solo host, or anyone during a lull -- finds the frontier permanently that far
-            // in the future. Without this it would be pulled to the frontier every frame and
-            // the simulation would run LocalInputDelay times faster than real time. Confirming
-            // is settling the past; it is not licence to simulate the future early.
-            //
-            // This never delays anything: a tick held back here is confirmed on the very next
-            // call, by which time the clock has reached it.
-            int newConfirmed = _inputs.ConfirmedThrough;
-            if (newConfirmed > nextTick)
+            LastReplayLength = 0;
+            LastSimulationSteps = 0;
+            BudgetExhausted = false;
+            if (NeedsHardResync)
             {
-                newConfirmed = nextTick;
-            }
-
-            // The most the clock may lead confirmation by. The ring must retain the whole live
-            // window, from the confirmed tick out to the furthest tick local input is stamped.
-            int maxLead = _config.SnapshotHistory - _config.LocalInputDelay - 1;
-            if (maxLead < 1)
-            {
-                maxLead = 1;
-            }
-            bool canAdvanceClock = (nextTick - newConfirmed) <= maxLead;
-
-            // Nothing to do only when the clock is pinned by the history limit and no fresh
-            // confirmation has arrived to relieve it. New confirmation is always worth
-            // processing -- it shrinks the lead and lets the clock move again next frame.
-            if (!canAdvanceClock && newConfirmed <= _confirmedTick)
-            {
-                if (!_stalled)
-                {
-                    _stalled = true;
-                    SimLog.Warning(string.Format(
-                        "Stalled at tick {0}: confirmed only through {1}, and the lead cannot exceed {2} ticks " +
-                        "without outrunning the {3}-tick snapshot history. Widen SnapshotHistory to lead further, " +
-                        "or the peer that is behind needs to catch up.",
-                        _currentTick, _confirmedTick, maxLead, _config.SnapshotHistory));
-                }
                 return false;
             }
 
-            if (_stalled)
+            int proposedTarget = _targetTick + 1;
+            int maxLead = _config.SnapshotHistory - _netConfig.MaximumInputLead - 1;
+            if (proposedTarget - _confirmedTick <= maxLead)
             {
+                _targetTick = proposedTarget;
                 _stalled = false;
-                SimLog.Info(string.Format("Resumed at tick {0}", _currentTick));
+            }
+            else
+            {
+                _stalled = true;
             }
 
-            AdvanceConfirmed(newConfirmed);
+            int budget = _netConfig.MaxSimulationStepsPerFrame;
+            int newConfirmed = _inputs.ConfirmedThrough;
+            if (newConfirmed > _targetTick)
+            {
+                newConfirmed = _targetTick;
+            }
+            AdvanceConfirmed(newConfirmed, ref budget);
+            LastSimulationSteps = _netConfig.MaxSimulationStepsPerFrame - budget;
+            if (NeedsHardResync)
+            {
+                return false;
+            }
+            if (_targetTick - _confirmedTick >= _netConfig.HardResyncTicks)
+            {
+                RequireHardResync(string.Format(
+                    "Authoritative confirmation is {0} ticks behind the target.",
+                    _targetTick - _confirmedTick));
+                return false;
+            }
 
-            int windowEnd = canAdvanceClock ? nextTick : _currentTick;
-            RunPredictionConditional(windowEnd);
-            return true;
+            RunPredictionConditional(_targetTick, ref budget);
+            LastSimulationSteps = _netConfig.MaxSimulationStepsPerFrame - budget;
+            BudgetExhausted = budget == 0 && IsCatchingUp;
+            return !_stalled || LastSimulationSteps > 0;
         }
 
         /// <summary>
@@ -387,22 +478,30 @@ namespace UNDPWR.Rollback
         /// arrive in a frame -- a property of the network, not the simulation -- cannot change
         /// the state two peers agree on.
         /// </remarks>
-        private void AdvanceConfirmed(int newConfirmed)
+        private void AdvanceConfirmed(int newConfirmed, ref int budget)
         {
-            while (_confirmedTick < newConfirmed)
+            bool advanced = false;
+            int previouslySimulatedThrough = _currentTick;
+            while (_confirmedTick < newConfirmed && budget > 0)
             {
                 int tick = _confirmedTick + 1;
 
-                RestoreTo(_confirmedTick);
-                StepOnce(tick, false);
+                if (!TryRestoreTo(_confirmedTick))
+                {
+                    return;
+                }
+                StepOnce(tick, tick <= previouslySimulatedThrough);
                 CaptureInto(tick, true);
                 CaptureEntityHashes(tick);
+                budget -= 1;
+                advanced = true;
 
                 _confirmedTick = tick;
-                if (_currentTick < tick)
-                {
-                    _currentTick = tick;
-                }
+                _currentTick = tick;
+            }
+            if (advanced && _currentTick < _targetTick)
+            {
+                _pendingReplayFrom = _confirmedTick + 1;
             }
         }
 
@@ -472,21 +571,6 @@ namespace UNDPWR.Rollback
         }
 
         /// <summary>
-        /// Reads the PhysX identity assigned to every registered body, for verifying that two
-        /// peers built the world in the same order.
-        /// </summary>
-        /// <remarks>
-        /// A passthrough to <see cref="DeterministicWorld.ReadInternalIds"/> so a session can run
-        /// the registration-order check (<see cref="UNDPWR.Net.SimRegistrationCheck"/>) without
-        /// reaching past the engine for the world. The returned buffer is reused between calls;
-        /// copy anything that must outlive the next call. Valid only after the first step.
-        /// </remarks>
-        public SimInternalIdEntry[] ReadInternalIds(out int count)
-        {
-            return _world.ReadInternalIds(out count);
-        }
-
-        /// <summary>
         /// Resimulates the prediction window up to <paramref name="windowEnd"/>, but only
         /// from the earliest tick a misprediction or a new confirmation actually disturbed.
         /// </summary>
@@ -511,7 +595,7 @@ namespace UNDPWR.Rollback
         /// and never two restores in a row.
         /// </para>
         /// </remarks>
-        private void RunPredictionConditional(int windowEnd)
+        private void RunPredictionConditional(int windowEnd, ref int budget)
         {
             if (windowEnd < _confirmedTick)
             {
@@ -536,17 +620,19 @@ namespace UNDPWR.Rollback
                     replayFrom = dirty;
                 }
             }
-            _pendingReplayFrom = int.MaxValue;
-
             int replayed = 0;
-            if (replayFrom <= windowEnd)
+            if (replayFrom <= windowEnd && budget > 0)
             {
                 // The predecessor snapshot is valid by construction: replayFrom is the
                 // earliest dirty tick, so replayFrom - 1 was not disturbed and its snapshot
                 // -- confirmed when it equals _confirmedTick, otherwise a prediction from a
                 // prior frame -- still holds.
-                RestoreTo(replayFrom - 1);
-                for (int tick = replayFrom; tick <= windowEnd; ++tick)
+                if (!TryRestoreTo(replayFrom - 1))
+                {
+                    return;
+                }
+                int lastReplayed = replayFrom - 1;
+                for (int tick = replayFrom; tick <= windowEnd && budget > 0; ++tick)
                 {
                     // One restore before every step, including steps that were not rolled
                     // back to. PhysX warm-starts its solver from cached contact data, and
@@ -560,15 +646,27 @@ namespace UNDPWR.Rollback
                     // a second restore shifts the rotation by one ULP.
                     if (tick > replayFrom)
                     {
-                        RestoreTo(tick - 1);
+                        if (!TryRestoreTo(tick - 1))
+                        {
+                            return;
+                        }
                     }
 
                     StepOnce(tick, true);
                     CaptureInto(tick, false);
                     ++replayed;
+                    budget -= 1;
+                    lastReplayed = tick;
                 }
 
-                _currentTick = windowEnd;
+                _currentTick = lastReplayed;
+                _pendingReplayFrom = lastReplayed < windowEnd
+                    ? lastReplayed + 1
+                    : int.MaxValue;
+            }
+            else if (replayFrom > windowEnd)
+            {
+                _pendingReplayFrom = int.MaxValue;
             }
 
             LastReplayLength = replayed;
@@ -578,18 +676,16 @@ namespace UNDPWR.Rollback
                 "Conditionally replayed {0} tick(s) from tick {1} to {2}", replayed, replayFrom, windowEnd));
         }
 
-        private void RestoreTo(int tick)
+        private bool TryRestoreTo(int tick)
         {
             Snapshot snapshot;
             if (!_snapshots.TryGet(tick, out snapshot))
             {
-                // The tick fell out of history, which means the peer fell further behind
-                // than SnapshotHistory allows. Nothing local can fix that; the session
-                // has to resynchronise.
-                throw new InvalidOperationException(string.Format(
+                RequireHardResync(string.Format(
                     "Cannot rewind to tick {0}; the oldest retained tick is {1}. This peer has fallen further " +
                     "behind than SimConfig.SnapshotHistory ({2} ticks) allows and needs a synchronised rebuild.",
                     tick, _snapshots.OldestTick, _config.SnapshotHistory));
+                return false;
             }
 
             // Just reinstate the snapshot. No contact-state reset is needed or wanted here:
@@ -601,10 +697,25 @@ namespace UNDPWR.Rollback
             // for the plain sphere, the compound ball, and a pooled world). Resetting contacts
             // on every restore was tried and is actively harmful under variable-depth rollback,
             // where peers rewind by different amounts and so would reset a different number of
-            // times; see DeterministicWorld.ResetContactState, which remains only as a manual
-            // hard-resynchronisation tool.
+            // times. Hard resynchronisation recreates the native world instead.
             _world.RestoreState(snapshot.Data, snapshot.Size);
             RestoreManagedFrom(snapshot);
+            return true;
+        }
+
+        private void RequireHardResync(string reason)
+        {
+            if (_hardResyncReason != null)
+            {
+                return;
+            }
+            _hardResyncReason = reason;
+            SimLog.Warning(reason);
+            Action<string> handler = HardResyncRequired;
+            if (handler != null)
+            {
+                handler(reason);
+            }
         }
 
         private void StepOnce(int tick, bool isReplay)
@@ -612,6 +723,15 @@ namespace UNDPWR.Rollback
             SimLog.CurrentTick = tick;
 
             SimInputFrame frame = _inputs.GetOrPredict(tick);
+
+            IList<SimAuthoritativeEvent> events = _events.Get(tick);
+            for (int eventIndex = 0; eventIndex < events.Count; ++eventIndex)
+            {
+                for (int handlerIndex = 0; handlerIndex < _eventHandlers.Count; ++handlerIndex)
+                {
+                    _eventHandlers[handlerIndex].OnAuthoritativeEvent(events[eventIndex], isReplay);
+                }
+            }
 
             for (int i = 0; i < _handlers.Count; ++i)
             {
@@ -717,7 +837,7 @@ namespace UNDPWR.Rollback
         /// <remarks>
         /// Called on the peer that owns the timeline (the host) to produce the agreed state
         /// every other peer, including a mid-match joiner, restores through
-        /// <see cref="PrepareForRebuild(ref SimRebuildState, bool)"/>. The returned state owns
+        /// <see cref="PrepareForRebuild(ref SimRebuildState, Action)"/>. The returned state owns
         /// its buffers (they are copied out of the ring), so it is safe to serialise and send
         /// after later ticks have recycled the slot.
         /// </remarks>
@@ -736,6 +856,8 @@ namespace UNDPWR.Rollback
             SimRebuildState raw = new SimRebuildState();
             raw.ResumeTick = tick;
             raw.PlayerIds = _inputs.CopyPlayerIds();
+            _inputs.CopyBaseline(tick, out raw.LastInputs, out raw.LastInputSequences);
+            raw.PendingEvents = _events.CopyAfter(tick);
             raw.PhysicsData = snapshot.Data;
             raw.PhysicsSize = snapshot.Size;
             raw.PhysicsHash = snapshot.Hash;
@@ -768,7 +890,7 @@ namespace UNDPWR.Rollback
         /// apply that finalized payload once more on the producer. The returned state is the
         /// same state the producer consumed and is safe to serialize. Samples should use this
         /// instead of composing <see cref="CaptureRebuildState"/> and
-        /// <see cref="PrepareForRebuild(ref SimRebuildState, Action, bool)"/> themselves.
+        /// <see cref="PrepareForRebuild(ref SimRebuildState, Action)"/> themselves.
         /// </para>
         /// The caller's gameplay roster must already describe <paramref name="playerIds"/>
         /// when this method is entered, because the reconcile callback normally reads it.
@@ -779,12 +901,9 @@ namespace UNDPWR.Rollback
         /// Brings managed entities and pooled native bodies into line with the target roster.
         /// </param>
         /// <param name="state">The finalized, self-owned payload to broadcast.</param>
-        /// <param name="recreateWorld">
-        /// Whether each apply recreates the native world. Keep the default for networked play.
-        /// </param>
         /// <returns>False only when the current confirmed snapshot is unavailable.</returns>
         public bool TryProduceRebuildState(IList<uint> playerIds, Action reconcile,
-            out SimRebuildState state, bool recreateWorld = true)
+            out SimRebuildState state)
         {
             if (playerIds == null)
             {
@@ -798,15 +917,37 @@ namespace UNDPWR.Rollback
                 return false;
             }
 
+            uint[] priorPlayerIds = seed.PlayerIds;
+            SimInput[] priorInputs = seed.LastInputs;
+            uint[] priorSequences = seed.LastInputSequences;
             seed.PlayerIds = new uint[playerIds.Count];
             for (int i = 0; i < playerIds.Count; ++i)
             {
                 seed.PlayerIds[i] = playerIds[i];
             }
             Array.Sort(seed.PlayerIds);
+            seed.LastInputs = new SimInput[seed.PlayerIds.Length];
+            seed.LastInputSequences = new uint[seed.PlayerIds.Length];
+            for (int i = 0; i < seed.PlayerIds.Length; ++i)
+            {
+                uint playerId = seed.PlayerIds[i];
+                int priorSlot = Array.BinarySearch(priorPlayerIds, playerId);
+                if (priorSlot >= 0 && priorInputs != null && priorSequences != null
+                    && priorSlot < priorInputs.Length && priorSlot < priorSequences.Length)
+                {
+                    seed.LastInputs[i] = priorInputs[priorSlot];
+                    seed.LastInputSequences[i] = priorSequences[priorSlot];
+                }
+                else
+                {
+                    seed.LastInputs[i] = SimInput.Neutral(playerId, seed.ResumeTick);
+                }
+                seed.LastInputs[i].PlayerId = playerId;
+                seed.LastInputs[i].Tick = seed.ResumeTick;
+            }
 
             // First apply produces the desired final state from the old confirmed state.
-            PrepareForRebuild(ref seed, reconcile, recreateWorld);
+            PrepareForRebuild(ref seed, reconcile);
             if (!CaptureRebuildState(_confirmedTick, out state))
             {
                 return false;
@@ -814,7 +955,7 @@ namespace UNDPWR.Rollback
 
             // Then consume exactly what receivers consume. This second apply is the invariant
             // that cannot safely be left to each sample's rebuild orchestration.
-            PrepareForRebuild(ref state, reconcile, recreateWorld);
+            PrepareForRebuild(ref state, reconcile);
             return true;
         }
 
@@ -824,11 +965,7 @@ namespace UNDPWR.Rollback
         /// history, replaces the roster when it changed, and resumes from the agreed tick.
         /// </summary>
         /// <remarks>
-        /// This is the joiner-safe form of <see cref="PrepareForRebuild(int, byte[], int, bool)"/>.
-        /// The other overload captures the managed channels from whatever the provider currently
-        /// holds, which assumes the caller has already driven its game objects to the agreed
-        /// state — impossible for a peer that was not present for the ticks that produced it.
-        /// Here the managed channels are restored straight from the payload, so a fresh joiner
+        /// Managed channels are restored straight from the payload, so a fresh joiner
         /// that has built the identical static world (same pool, same stable IDs) reaches the
         /// exact entity and game state every existing peer holds, without simulating a tick.
         /// <para>
@@ -850,12 +987,7 @@ namespace UNDPWR.Rollback
         /// already-reconciled snapshot is harmless because it is idempotent: the desired set
         /// already matches.
         /// </param>
-        /// <param name="recreateWorld">
-        /// When true (the default) the native world is destroyed and rebuilt in stable-ID order
-        /// before the snapshot is restored, which is mandatory for a joiner — see the remarks on
-        /// <see cref="PrepareForRebuild(int, byte[], int, bool)"/>.
-        /// </param>
-        public void PrepareForRebuild(ref SimRebuildState state, Action reconcile = null, bool recreateWorld = true)
+        public void PrepareForRebuild(ref SimRebuildState state, Action reconcile = null)
         {
             if (state.PhysicsData == null)
             {
@@ -868,18 +1000,10 @@ namespace UNDPWR.Rollback
 
             int resumeTick = state.ResumeTick;
             SimLog.Info(string.Format(
-                "Synchronised rebuild: resuming at tick {0} from a {1} byte snapshot, {2} player(s){3}",
-                resumeTick, state.PhysicsSize, state.PlayerIds == null ? 0 : state.PlayerIds.Length,
-                recreateWorld ? ", rebuilding the native world" : ""));
+                "Synchronised rebuild: resuming at tick {0} from a {1} byte snapshot, {2} player(s), rebuilding the native world",
+                resumeTick, state.PhysicsSize, state.PlayerIds == null ? 0 : state.PlayerIds.Length));
 
-            if (recreateWorld)
-            {
-                _world.RecreateNativeWorld();
-            }
-            else
-            {
-                _world.CommitPending();
-            }
+            _world.RecreateNativeWorld();
 
             _world.RestoreState(state.PhysicsData, state.PhysicsSize);
 
@@ -913,7 +1037,15 @@ namespace UNDPWR.Rollback
 
             // Everything before the rebuild describes a timeline that no longer exists.
             _snapshots.Clear();
-            _inputs.Reset(resumeTick);
+            _inputs.ResetAfterConfirmed(resumeTick);
+            if (state.LastInputs != null && state.LastInputSequences != null
+                && state.LastInputs.Length == _inputs.PlayerCount
+                && state.LastInputSequences.Length == _inputs.PlayerCount)
+            {
+                _inputs.SeedBaseline(
+                    resumeTick, state.LastInputs, state.LastInputSequences);
+            }
+            _events.ResetAfterConfirmed(resumeTick, state.PendingEvents);
 
             Snapshot slot = _snapshots.BeginWrite(resumeTick);
             ulong hash;
@@ -923,12 +1055,22 @@ namespace UNDPWR.Rollback
             _snapshots.CompleteWrite(slot, captured, hash);
             CaptureManagedInto(slot);
             slot.IsConfirmed = true;
+            if (reconcile == null && state.PhysicsHash != 0 && hash != state.PhysicsHash)
+            {
+                throw new InvalidOperationException(string.Format(
+                    "Rebuild physics hash 0x{0:X16} restored as 0x{1:X16}.",
+                    state.PhysicsHash, hash));
+            }
 
             _confirmedTick = resumeTick;
             _currentTick = resumeTick;
+            _targetTick = resumeTick;
             _stalled = false;
             LastReplayLength = 0;
+            LastSimulationSteps = 0;
+            BudgetExhausted = false;
             _pendingReplayFrom = int.MaxValue;
+            _hardResyncReason = null;
 
             SimLog.Info(string.Format("Rebuild complete; state hash is 0x{0:X16}", hash));
         }
@@ -955,83 +1097,5 @@ namespace UNDPWR.Rollback
             return true;
         }
 
-        /// <summary>
-        /// Discards the timeline in preparation for a synchronised rebuild.
-        /// </summary>
-        /// <remarks>
-        /// A peer that joins mid-match has no history, and the native suite shows a world
-        /// with no history cannot reproduce a running world's trace under any contact
-        /// reset mode. What it can do is agree with another world that also started from
-        /// the same snapshot: two worlds rebuilt that way were measured bit-identical for
-        /// thirty-two ticks with their actors registered in opposite orders.
-        /// <para>
-        /// So the joiner does not chase the others. Every peer restores the same snapshot
-        /// at the same tick, discards its history, and continues from there, which puts
-        /// them all back on an identical footing. The same procedure is the recovery path
-        /// when a desync is detected.
-        /// </para>
-        /// </remarks>
-        /// <param name="resumeTick">The tick the session resumes from.</param>
-        /// <param name="state">The agreed snapshot every peer restores.</param>
-        /// <param name="size">How many bytes of <paramref name="state"/> are meaningful.</param>
-        /// <param name="recreateWorld">
-        /// When true (the default), the native world is destroyed and rebuilt from scratch
-        /// before the snapshot is restored, so every peer — a mid-match joiner included —
-        /// reaches the identical PhysX internal arrangement. Restoring into a world that has
-        /// run a match instead is the known-incorrect path: its internal indices carry the
-        /// shape of a history the joiner never saw. Pass false only for a peer that provably
-        /// built its world in the same order the snapshot was captured under and has not
-        /// churned its registry since, which in practice means never for a real rebuild.
-        /// </param>
-        public void PrepareForRebuild(int resumeTick, byte[] state, int size, bool recreateWorld = true)
-        {
-            if (state == null)
-            {
-                throw new ArgumentNullException("state");
-            }
-            if (resumeTick < 0)
-            {
-                throw new ArgumentOutOfRangeException("resumeTick", "Tick numbers start at zero.");
-            }
-
-            SimLog.Info(string.Format("Synchronised rebuild: resuming at tick {0} from a {1} byte snapshot{2}",
-                resumeTick, size, recreateWorld ? ", rebuilding the native world" : ""));
-
-            if (recreateWorld)
-            {
-                // Rebuild from nothing so the internal arrangement is the one every peer
-                // reaches independently, then capture from the fresh world below.
-                _world.RecreateNativeWorld();
-            }
-            else
-            {
-                _world.CommitPending();
-            }
-            _world.RestoreState(state, size);
-
-            // Everything before the rebuild describes a timeline that no longer exists.
-            _snapshots.Clear();
-            _inputs.Reset(resumeTick);
-
-            Snapshot slot = _snapshots.BeginWrite(resumeTick);
-            ulong hash;
-            byte[] buffer = slot.Data;
-            int captured = _world.CaptureState(ref buffer, out hash);
-            slot.Data = buffer;
-            _snapshots.CompleteWrite(slot, captured, hash);
-            // The managed channels are captured from whatever the provider currently holds,
-            // so the game layer must have applied the agreed managed state to its objects
-            // before calling this, exactly as it applies the agreed physics snapshot.
-            CaptureManagedInto(slot);
-            slot.IsConfirmed = true;
-
-            _confirmedTick = resumeTick;
-            _currentTick = resumeTick;
-            _stalled = false;
-            LastReplayLength = 0;
-            _pendingReplayFrom = int.MaxValue;
-
-            SimLog.Info(string.Format("Rebuild complete; state hash is 0x{0:X16}", hash));
-        }
     }
 }

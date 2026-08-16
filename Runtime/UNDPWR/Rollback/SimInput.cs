@@ -5,6 +5,19 @@ using UNDPWR.Diagnostics;
 
 namespace UNDPWR.Rollback
 {
+    /// <summary>How a local input-buffer slot obtained its command.</summary>
+    public enum SimInputProvenance : byte
+    {
+        /// <summary>The command was predicted by holding the preceding command.</summary>
+        Predicted = 0,
+
+        /// <summary>The local client has proposed the command but the server has not finalized it.</summary>
+        Speculative = 1,
+
+        /// <summary>The authoritative server finalized this command for this tick.</summary>
+        Authoritative = 2
+    }
+
     /// <summary>
     /// One player's input for one tick.
     /// </summary>
@@ -47,18 +60,17 @@ namespace UNDPWR.Rollback
         public float AxisW;
 
         /// <summary>
-        /// True when this input was predicted rather than received.
+        /// Whether this local slot is predicted, speculative, or authoritative.
         /// </summary>
         /// <remarks>
-        /// Not part of equality or the hash, because whether a value was guessed does not
-        /// change what the simulation does with it. It exists so a predicted value can be
-        /// overwritten when the real input arrives, and so diagnostics can tell the two
-        /// apart. It does not gate rollback: the engine rewinds on a fixed schedule
-        /// whether or not a prediction turned out correct, so the operation sequence does
-        /// not depend on network timing. See <see cref="RollbackEngine.SubmitInput"/>.
+        /// Local bookkeeping only; it is not serialized or hashed.
         /// </remarks>
         [NonSerialized]
-        public bool IsPredicted;
+        public SimInputProvenance Provenance;
+
+        /// <summary>The proposal sequence associated with speculative or canonical input.</summary>
+        [NonSerialized]
+        public uint Sequence;
 
         /// <summary>An input with everything neutral, used as the prediction seed.</summary>
         public static SimInput Neutral(uint playerId, int tick)
@@ -66,6 +78,7 @@ namespace UNDPWR.Rollback
             SimInput input = new SimInput();
             input.PlayerId = playerId;
             input.Tick = tick;
+            input.Provenance = SimInputProvenance.Predicted;
             return input;
         }
 
@@ -122,8 +135,8 @@ namespace UNDPWR.Rollback
         /// <inheritdoc/>
         public override string ToString()
         {
-            return string.Format("Input(p{0}, t{1}, buttons 0x{2:X8}, axes {3:F3} {4:F3} {5:F3} {6:F3}{7})",
-                PlayerId, Tick, Buttons, AxisX, AxisY, AxisZ, AxisW, IsPredicted ? ", predicted" : "");
+            return string.Format("Input(p{0}, t{1}, buttons 0x{2:X8}, axes {3:F3} {4:F3} {5:F3} {6:F3}, {7})",
+                PlayerId, Tick, Buttons, AxisX, AxisY, AxisZ, AxisW, Provenance);
         }
     }
 
@@ -154,7 +167,7 @@ namespace UNDPWR.Rollback
             {
                 for (int i = 0; i < _inputs.Length; ++i)
                 {
-                    if (_inputs[i].IsPredicted) return false;
+                    if (_inputs[i].Provenance != SimInputProvenance.Authoritative) return false;
                 }
                 return true;
             }
@@ -193,7 +206,8 @@ namespace UNDPWR.Rollback
             for (int i = 0; i < _inputs.Length; ++i)
             {
                 _inputs[i] = SimInput.Neutral(_inputs[i].PlayerId, tick);
-                _inputs[i].IsPredicted = true;
+                _inputs[i].Provenance = SimInputProvenance.Predicted;
+                _inputs[i].Sequence = 0;
             }
         }
     }

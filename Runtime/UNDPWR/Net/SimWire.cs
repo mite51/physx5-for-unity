@@ -4,49 +4,55 @@ using UNDPWR.Rollback;
 namespace UNDPWR.Net
 {
     /// <summary>
-    /// The kinds of message the framework puts on the wire.
+    /// Messages exchanged between the authoritative server and its clients.
     /// </summary>
     /// <remarks>
-    /// The set is deliberately tiny. Inputs are the only <i>simulation</i> data that ever
-    /// crosses the network — everything else is recomputed identically by every peer — so the
-    /// other two kinds are pure control traffic: one handshake to agree the session is
-    /// compatible before a tick runs, and one confirmed-tick hash so a divergence is caught as
-    /// a reported mismatch rather than as a slow, unattributable drift.
+    /// Every message starts with its kind followed by <see cref="SimProtocol.Version"/>.
+    /// Incompatible versions fail the handshake; there is no legacy wire fallback.
     /// </remarks>
     public enum SimMessageKind : byte
     {
-        /// <summary>Config hash and player set, exchanged once at join.</summary>
-        Handshake = 1,
+        /// <summary>A client requests admission to the authoritative timeline.</summary>
+        ClientHello = 1,
 
-        /// <summary>One or more <see cref="SimInput"/>s. The only simulation data on the wire.</summary>
-        Input = 2,
+        /// <summary>The server accepts the client and reports the current timeline epoch.</summary>
+        ServerHello = 2,
 
-        /// <summary>
-        /// A confirmed tick and its three per-channel snapshot hashes, for desync detection.
-        /// Peers compare the fold; the parts are carried so a mismatch can name the channel.
-        /// </summary>
-        Hash = 3,
+        /// <summary>A client's requested future input command.</summary>
+        InputProposal = 3,
 
-        /// <summary>
-        /// A full synchronised-rebuild payload: the agreed tick, roster and every snapshot
-        /// channel, for a mid-match join, a leave, or a desync recovery. Carried on a reliable
-        /// path by the game rather than through the best-effort input transport.
-        /// </summary>
-        Rebuild = 4,
+        /// <summary>The server's admission result for one input proposal.</summary>
+        InputDecision = 4,
 
-        /// <summary>
-        /// Each body's stable ID paired with the PhysX actor index it was given, sent once after
-        /// the first step so peers can verify they built the world in the same order. A mismatch
-        /// is a determinism bug the config and roster handshake cannot see.
-        /// </summary>
-        InternalIds = 5,
+        /// <summary>Every authoritative player input for one finalized server tick.</summary>
+        CanonicalFrame = 5,
 
-        /// <summary>
-        /// One confirmed tick's per-entity hashes, sent only when a physics disagreement is
-        /// detected for that tick, so the peers can name the body that diverged rather than
-        /// only the tick.
-        /// </summary>
-        EntityHashes = 6,
+        /// <summary>A client clock sample sent to the server.</summary>
+        ClockPing = 6,
+
+        /// <summary>The server's clock response.</summary>
+        ClockPong = 7,
+
+        /// <summary>The authoritative snapshot hashes for a finalized tick.</summary>
+        ServerHash = 8,
+
+        /// <summary>A client asks the server for a hard timeline rebuild.</summary>
+        RebuildRequest = 9,
+
+        /// <summary>A reliable authoritative full-state rebuild payload.</summary>
+        Rebuild = 10,
+
+        /// <summary>A reliable deterministic gameplay-event proposal.</summary>
+        EventProposal = 11,
+
+        /// <summary>The authoritative scheduling decision for a gameplay event.</summary>
+        EventDecision = 12,
+
+        /// <summary>Construction and registration identity sent during admission/rebuild.</summary>
+        Construction = 13,
+
+        /// <summary>Per-entity hashes requested after a server-hash disagreement.</summary>
+        EntityHashes = 14,
     }
 
     /// <summary>
@@ -269,10 +275,21 @@ namespace UNDPWR.Net
         /// </summary>
         public byte[] ReadBytes()
         {
+            return ReadBytes(int.MaxValue);
+        }
+
+        /// <summary>Reads a length-prefixed byte block with an allocation limit.</summary>
+        public byte[] ReadBytes(int maximumCount)
+        {
             int count = ReadInt32();
             if (count < 0)
             {
                 throw new SimWireFormatException("negative byte-block length");
+            }
+            if (count > maximumCount)
+            {
+                throw new SimWireFormatException(string.Format(
+                    "byte-block length {0} exceeds limit {1}", count, maximumCount));
             }
             Require(count);
             byte[] result = new byte[count];
@@ -314,9 +331,8 @@ namespace UNDPWR.Net
     /// The payload is the exact simulation-affecting fields — player, tick, buttons and the
     /// four axes — as raw bits, 28 bytes. It is deliberately <b>not</b> quantised here:
     /// whatever a peer submits locally is what it must send, so any quantisation has to happen
-    /// before the input is submitted (see <c>SimInputEncoder</c>), not on the wire, or the
-    /// sender would simulate a value its peers never receive. <see cref="SimInput.IsPredicted"/>
-    /// is not carried; it is a local bookkeeping flag the receiver always clears on submit.
+    /// before the input is submitted (see <c>SimInputEncoder</c>), not on the wire.
+    /// Provenance and proposal sequence are envelope/local bookkeeping, not payload fields.
     /// </remarks>
     public static class SimInputCodec
     {

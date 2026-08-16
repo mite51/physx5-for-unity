@@ -32,7 +32,7 @@ namespace UNDPWR.Gameplay
     /// own state. So the same object that decides the order also decides what is captured, and
     /// the two can never drift apart.
     /// </remarks>
-    public sealed class SimGameHost : ISimStepHandler, ISimStateProvider
+    public sealed class SimGameHost : ISimStepHandler, ISimStateProvider, ISimAuthoritativeEventHandler
     {
         private readonly RollbackEngine _engine;
         private readonly SimContext _context;
@@ -130,10 +130,17 @@ namespace UNDPWR.Gameplay
 
             _engine.SetStateProvider(this);
             _engine.AddHandler(this);
+            _engine.AddEventHandler(this);
             _engine.Initialise();
 
             SimLog.Info(string.Format("Game host begun: {0} entities, {1} players",
                 _registry.Count, _players.Count));
+        }
+
+        /// <summary>Injects a server-assigned action immediately before its simulation tick.</summary>
+        public void OnAuthoritativeEvent(SimAuthoritativeEvent command, bool isReplay)
+        {
+            _actions.SubmitNetworkAction(command.TypeId, command.Payload, command.Tick);
         }
 
         /// <summary>Adds a player and notifies the game mode.</summary>

@@ -140,9 +140,6 @@ namespace UNDPWR.Interop
         /// <summary>Stabilization pass for resting stacks.</summary>
         EnableStabilization = 1 << 2,
 
-        /// <summary>Active-actor reporting, used to skip untouched presentation updates.</summary>
-        EnableActiveActors = 1 << 3,
-
         /// <summary>
         /// <c>PxSceneFlag::eENABLE_ENHANCED_DETERMINISM</c>. Makes results independent of
         /// the number of worker threads and of actors that are not interacting. Required
@@ -164,46 +161,6 @@ namespace UNDPWR.Interop
         /// on for every world it creates, so managed callers never need to pass it.
         /// </summary>
         EnableContactEvents = 1 << 7
-    }
-
-    /// <summary>
-    /// How aggressively to erase the simulation state PhysX carries between steps but
-    /// that no snapshot can capture. Mirrors <c>pxw::PxwContactResetMode</c>.
-    /// </summary>
-    /// <remarks>
-    /// This is NOT part of rollback and the rollback engine never invokes it. Under the
-    /// cold-step discipline the engine re-poses every body with <c>setGlobalPose</c> at the
-    /// top of every step, which invalidates PhysX's contact cache, so nothing carries across
-    /// a restore and <c>restore + step</c> is already a pure function of the restored state
-    /// (verified in <c>PxwOffsetShapeRepro</c> Stage G across seven hostile histories). There
-    /// is therefore no residue for a reset to remove.
-    /// <para>
-    /// Resetting on <i>every</i> restore is in fact harmful: under variable-depth rollback
-    /// two peers rewind by different amounts and so would call the reset a different number
-    /// of times, and the reset's own side effects on scene, broadphase and island bookkeeping
-    /// are not invariant across that. It was tried and it desynced live play.
-    /// </para>
-    /// <para>
-    /// These modes exist only as a deliberate, one-shot <b>hard resynchronisation</b> tool
-    /// (see <see cref="UNDPWR.Core.DeterministicWorld.ResetContactState"/>) for the case where
-    /// discarding history is the explicit intent. <see cref="None"/> is the default and the
-    /// only value the rollback path uses.
-    /// </para>
-    /// </remarks>
-    public enum SimContactResetMode : uint
-    {
-        /// <summary>Leave PhysX's carried state alone. The default.</summary>
-        None = 0,
-
-        /// <summary>Discard contact pairs via <c>PxScene::resetFiltering</c>.</summary>
-        ResetFiltering = 1,
-
-        /// <summary>
-        /// Remove every actor and re-add it in stable-ID order, leaving PhysX with no
-        /// carried state. Sleep state is reset by the reinsertion, so a restore must
-        /// follow.
-        /// </summary>
-        Reinsert = 2
     }
 
     /// <summary>Severity of a native diagnostic. Mirrors <c>pxw::PxwLogSeverity</c>.</summary>
@@ -423,44 +380,4 @@ namespace UNDPWR.Interop
         public SimTransform Pose;
     }
 
-    /// <summary>
-    /// The identity PhysX assigned to a registered body, paired with the stable ID the
-    /// application knows it by. Mirrors <c>pxw::PxwInternalIdEntry</c>.
-    /// </summary>
-    /// <remarks>
-    /// PhysX hands out both indices from insertion order, and they decide the order the
-    /// solver visits bodies and islands. Two peers that registered the same bodies in
-    /// different orders get different indices, sum contact impulses in a different
-    /// order, and round differently. The native suite measures this: a sixteen-body
-    /// scene built in reverse order diverges within a few hundred steps, while the same
-    /// scene with no contacts never diverges at all.
-    /// <para>
-    /// That failure is slow, silent, and impossible to diagnose from its symptoms.
-    /// Comparing these records across peers converts it into an immediate error that
-    /// names the body registered out of order.
-    /// </para>
-    /// </remarks>
-    [StructLayout(LayoutKind.Sequential)]
-    public struct SimInternalIdEntry
-    {
-        /// <summary>The stable ID the application knows this body by.</summary>
-        public uint StableId;
-
-        /// <summary>The entry's <see cref="SimHandleKind"/>.</summary>
-        public uint Kind;
-
-        /// <summary>
-        /// PhysX's own actor index, or <c>0xFFFFFFFF</c> if the actor is not in a scene.
-        /// </summary>
-        public uint InternalActorIndex;
-
-        /// <summary>Padding, to match the native layout.</summary>
-        public uint Padding;
-
-        /// <summary>
-        /// PhysX's island node index, or <c>0xFFFFFFFFFFFFFFFF</c> for statics, which do
-        /// not participate in islands.
-        /// </summary>
-        public ulong IslandNodeIndex;
-    }
 }

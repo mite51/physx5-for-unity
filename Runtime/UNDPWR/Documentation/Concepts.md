@@ -4,32 +4,32 @@ This chapter explains what the framework is doing and why, so the rules in the r
 manual read as consequences rather than arbitrary constraints. You can build a game without
 it, but every "do not do X" elsewhere traces back to something here.
 
-## Inputs on the wire, nothing else
+## Canonical commands on the wire
 
-Every peer simulates the whole physics world locally, at a fixed tick rate, from the same
-inputs. Only inputs cross the network. Because every peer computes the same result, no one
-sends positions, so bandwidth is a function of player count and does not grow with the physics
-scene.
+The authoritative server and every client simulate the whole physics world locally at a fixed
+tick rate. Clients propose inputs and deterministic events; the server assigns their ticks and
+broadcasts canonical frames. Positions are sent only for exceptional rebuilds, so ordinary
+bandwidth remains a function of player count rather than scene size.
 
 That only works if the simulations genuinely agree, to the bit, forever. Most of this
 framework exists to make them agree and to notice immediately when they do not.
 
 ## The governing rule
 
-> **Only the confirmed timeline is compared between peers, and under PGS it is a pure function
-> of the snapshot before each tick.**
+> **The server owns the confirmed timeline, and under PGS each confirmed tick is a pure
+> function of its predecessor snapshot and canonical command frame.**
 
 Two different questions hide inside "is it deterministic", and conflating them causes most of
 the confusion:
 
-- **Peer agreement** — do two peers computing the same tick agree with each other? This is the
-  one that matters, and the one the framework guarantees.
+- **Server agreement** — does a client computing a confirmed tick match the authoritative
+  server? This is the agreement the framework checks.
 - **Self-transparency** — does a replayed tick match what the same peer computed the first time
   through? This matters only because, when it holds, peers that did *different amounts of work*
   (rolled back different depths, predicted different distances) still land on identical
   confirmed state.
 
-The framework relies on peer agreement. It never compares a peer against a hypothetical
+The framework relies on server agreement. It never compares a client against a hypothetical
 un-rewound version of itself.
 
 ## Why PhysX makes this hard
@@ -58,42 +58,33 @@ it cools the caches, so a replayed tick and a never-rolled-back tick take the id
 Under PGS this is enough to make replay bitwise transparent. Under TGS it is not: the solver's
 per-substep state survives the restore, leaving a residual that is invisible for a few hundred
 frames and then flips a bit long after the frame that caused it. That is why a networked
-session **requires PGS** — [`SimConfig.Validate`](../Core/SimConfig.cs) refuses any other
-solver. See [Configuration](Configuration.md).
+session **requires PGS**. UNDPWR fixes the solver to PGS rather than exposing an unsafe TGS
+selection. See [Configuration](Configuration.md).
 
 ## Free-running clock and conditional rollback
 
-Prediction is not a fixed shared horizon. The clock advances one tick per `FixedUpdate`, and
-how far a peer runs ahead of the confirmed tick is *emergent*: it grows when confirmations lag
-and shrinks as they arrive. Each `Advance()`:
+Prediction is not a fixed shared horizon. `TargetTick` advances once per `FixedUpdate`, while
+`CurrentTick` may trail during budgeted replay. Each `Advance()`:
 
 1. drains whatever the confirmed frontier reached into the confirmed timeline, one cold
    restore-and-step per tick, capturing each;
-2. advances the clock one tick, unless doing so would outrun the snapshot ring;
-3. resimulates the prediction window — but only from the earliest tick a misprediction or a
-   new confirmation actually disturbed.
+2. advances the wall-clock target one tick when history permits;
+3. resimulates from the earliest disturbed tick toward the target, stopping after the
+   configured complete-tick work budget.
 
-A peer that would lead further than the snapshot ring can retain **stalls** — a visible pause —
-rather than silently losing state a late input still needs. Because confirmed hashes never
-depended on how far anyone predicted or rewound, peers that did different amounts of work still
-agree. [Rollback and input](RollbackAndInput.md) covers the tick lifecycle in detail.
+A client that falls beyond the local recovery budget requests a server rebuild rather than
+entering an unbounded replay spiral. [Rollback and input](RollbackAndInput.md) covers the tick
+lifecycle in detail.
 
-## Latency: two peer-local knobs
+## Latency: adaptive lead and bounded recovery
 
-Two settings shape how a late packet is handled, and neither has to match between peers because
-neither changes the simulation:
+`SimAdaptiveInputLead` targets measured server round-trip latency plus jitter and a safety
+margin. It rises quickly after retiming and falls slowly after a stable period. Immediate feel
+comes from presentation anticipation, not from a zero-delay simulation mode.
 
-- **`SimConfig.LocalInputDelay`** stamps a peer's own input that many ticks ahead of the tick
-  it is simulating. An input that crosses the network faster than the delay arrives before
-  anyone predicts it — so there is nothing to mispredict. The cost is local responsiveness: the
-  player's own action happens `LocalInputDelay` ticks after they asked for it.
-- **`SimConfig.SnapshotHistory`** bounds how far the clock may lead the confirmed tick before
-  the ring can no longer retain the whole live window. That cap
-  (`SnapshotHistory - LocalInputDelay - 1` ticks of lead) is where a peer stalls.
-
-At the defaults — delay 2, history 32, 60 Hz — inputs under ~33 ms never mispredict, and a peer
-can lead by ~29 ticks (~480 ms) before the ring bounds it. Both knobs are peer-local and not
-hashed: a peer on a worse link simply leads less. See [Configuration](Configuration.md).
+`SnapshotHistory`, `MaxSimulationStepsPerFrame`, and `HardResyncTicks` bound local correction
+cost. Defaults are 64 retained ticks, 8 simulation steps per Unity frame and rebuild after a
+30-tick backlog. See [Configuration](Configuration.md).
 
 ## Three state channels
 

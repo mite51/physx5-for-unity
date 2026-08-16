@@ -71,6 +71,59 @@ namespace UNDPWR.Gameplay
             _factories.Add(() => factory());
         }
 
+        /// <summary>Encodes a registered action for authoritative event submission.</summary>
+        public void EncodeNetworkAction(ISimAction action, out ushort typeId, out byte[] payload)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException("action");
+            }
+            int index;
+            if (!_typeIndex.TryGetValue(action.GetType(), out index) || index > ushort.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    "The action type is not registered for deterministic serialization.");
+            }
+            SimStateWriter writer = new SimStateWriter(null);
+            action.Serialize(ref writer);
+            payload = new byte[writer.Position];
+            if (writer.Position > 0)
+            {
+                Array.Copy(writer.Buffer, payload, writer.Position);
+            }
+            typeId = (ushort)index;
+        }
+
+        /// <summary>Decodes and schedules an event accepted by the authoritative server.</summary>
+        public void SubmitNetworkAction(ushort typeId, byte[] payload, int scheduledTick)
+        {
+            ISimAction action = DecodeNetworkAction(typeId, payload);
+            Submit(action, scheduledTick);
+        }
+
+        /// <summary>Validates an authoritative event payload without scheduling it.</summary>
+        public void ValidateNetworkAction(ushort typeId, byte[] payload)
+        {
+            DecodeNetworkAction(typeId, payload);
+        }
+
+        private ISimAction DecodeNetworkAction(ushort typeId, byte[] payload)
+        {
+            if (typeId >= _factories.Count)
+            {
+                throw new InvalidOperationException("Unknown authoritative action type ID " + typeId);
+            }
+            byte[] bytes = payload ?? new byte[0];
+            ISimAction action = _factories[typeId]();
+            SimStateReader reader = new SimStateReader(bytes, bytes.Length);
+            action.Deserialize(ref reader);
+            if (reader.Remaining != 0)
+            {
+                throw new InvalidOperationException("Authoritative action payload was not consumed exactly.");
+            }
+            return action;
+        }
+
         /// <summary>Schedules an action for the current tick.</summary>
         public void Submit(ISimAction action)
         {

@@ -103,6 +103,25 @@ namespace UNDPWR.Tests
         }
 
         [Test]
+        public void NetworkActionCodecUsesTheRegisteredTypeId()
+        {
+            SimActionQueue sender = new SimActionQueue();
+            sender.RegisterActionType<DespawnAction>(() => new DespawnAction());
+            ushort typeId;
+            byte[] payload;
+            sender.EncodeNetworkAction(new DespawnAction(99), out typeId, out payload);
+
+            SimActionQueue receiver = new SimActionQueue();
+            receiver.RegisterActionType<DespawnAction>(() => new DespawnAction());
+            receiver.SubmitNetworkAction(typeId, payload, 20);
+
+            SimStateWriter writer = new SimStateWriter(null);
+            receiver.CaptureState(ref writer);
+            Assert.AreEqual(1, receiver.PendingCount);
+            Assert.Greater(writer.Position, 0);
+        }
+
+        [Test]
         public void PhaseMachineCaptureRestoreRoundTrips()
         {
             var machine = new SimPhaseMachine<Phase>(Phase.Warmup);

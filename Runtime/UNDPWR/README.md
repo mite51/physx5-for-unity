@@ -1,68 +1,43 @@
 # UNDPWR
 
-**Unity Networked Deterministic Physics With Rollback** — rollback netcode for PhysX 5 in
-Unity. Peers exchange only player inputs and each recomputes the physics identically, so
-bandwidth stays flat as the physics scene grows.
+Unity Networked Deterministic Physics With Rollback is authoritative rollback netcode for
+PhysX 5. A headless server runs the canonical deterministic timeline; clients predict from
+timestamped future input proposals and reconcile against server-finalized command frames.
 
-## The one rule everything follows
+## Core behavior
 
-**Only the confirmed timeline is compared between peers, and under PGS it is a pure function
-of the snapshot before each tick.** Every peer runs the same simulation from the same inputs;
-prediction and rollback hide latency locally, and a mandatory confirmed-hash check verifies
-that peers still agree. Everything else in the framework is a consequence of keeping that
-confirmed timeline reproducible. The [manual](Documentation/README.md) explains why and how.
+- Server-owned input and deterministic-event scheduling.
+- Late commands retimed forward; finalized history is never rewritten.
+- Predicted, local-speculative and server-authoritative input provenance.
+- RTT/jitter-driven adaptive input lead with immediate presentation anticipation.
+- Conditional full-world rollback from the earliest changed tick.
+- At most 8 complete simulation steps per Unity frame by default.
+- Automatic reliable server-snapshot rebuild after excessive lag or hash mismatch.
+- Construction/config admission hashes and per-tick three-channel state hashes.
 
-## What it does
-
-- Deterministic rigid bodies, articulations and vehicles over PhysX 5.
-- Free-running prediction with rollback that fires only when a prediction was wrong, and only
-  as deep as the correction needs.
-- Mid-match join and desync recovery through a synchronised rebuild.
-- Config-hash handshake and per-tick hash comparison so a mismatch is caught at join or named
-  when it happens.
-
-You supply the transport (a thin `ISimTransport`); the framework never puts simulation state
-on the wire. Matchmaking, rendering and cross-CPU-architecture play are out of scope — see
-[Limits and platforms](Documentation/LimitsAndPlatforms.md).
-
-## Quick start
-
-The recommended path is the gameplay layer: a `SimGameHost` drives the engine, and a
-`SimSession` drives the network. A minimal networked frame:
+## Minimal client frame
 
 ```csharp
-var config = SimConfig.Deterministic;   // PGS, 60 Hz, delay 2, history 32
-SimLog.AttachNativeSink();
+var simulation = SimConfig.Deterministic;
+var network = SimNetConfig.Authoritative;
+var engine = new RollbackEngine(world, playerIds, network);
 
-var world = new DeterministicWorld(config);
-var ids = new StableIdAllocator(sessionSeed);
-var engine = new RollbackEngine(world, playerIds);
+var client = new SimClientSession(
+    engine, transport, simulation, network,
+    localPlayerId, playerIds, host.Actions);
+client.Start(nowMicroseconds);
 
-var host = new SimGameHost(world, engine, ids);
-host.Pool.Add("ball", ballPrefab, 32);
-host.AddPlayer(localPlayerId, slot: 0);
-host.SetGameMode(new MyGameMode());
-host.Begin();                            // registers, commits, captures tick 0
-
-var session = new SimSession(engine, transport, config, localPlayerId, playerIds);
-session.Start();
-
-// once per FixedUpdate:
-session.Pump();                          // drain the network into the engine
-session.SubmitLocalInput(SampleInput()); // stamped for engine.LocalInputTick, fills the run
-engine.Advance();                        // one simulated tick
-session.PublishConfirmed();              // broadcast and check the new confirmed hash
+// FixedUpdate
+client.Pump(nowMicroseconds);
+client.SubmitLocalInput(SampleInput(), nowMicroseconds);
+client.Advance();
 ```
 
-New to the framework? Read [Getting started](Documentation/GettingStarted.md), which builds
-this up from a physics-only loop.
+The server uses `SimServerSession` over transport peer ID `0` and calls `Pump` then `Advance`.
 
-## Documentation
+`ISimTransport` provides directed authenticated sends plus `Unreliable` and
+`ReliableOrdered` delivery. GPU simulation remains available for non-networked worlds;
+authoritative sessions require CPU and the fixed PGS solver.
 
-The [manual](Documentation/README.md) is the full guide: getting started, the concepts behind
-rollback, the world and actor model, the gameplay layer, networking, the simulation APIs,
-configuration, limits, and troubleshooting.
-
-[CHANGELOG.md](CHANGELOG.md) records what has landed and, critically, every change to the two
-numbers that decide whether two peers interoperate: the managed config hash
-(`SimConfig.ComputeHash`) and the native snapshot format (`kStateVersion`).
+Read the [manual](Documentation/README.md), beginning with
+[Getting started](Documentation/GettingStarted.md).

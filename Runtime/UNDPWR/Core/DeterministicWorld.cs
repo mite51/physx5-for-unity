@@ -62,8 +62,6 @@ namespace UNDPWR.Core
         private byte[] _scratch = new byte[0];
         private SimPoseEntry[] _poseScratch = new SimPoseEntry[0];
         private SimEntryHash[] _hashScratch = new SimEntryHash[0];
-        private SimInternalIdEntry[] _internalIdScratch = new SimInternalIdEntry[0];
-        private SimEntryHash[] _constructionScratch = new SimEntryHash[0];
 
         /// <summary>The configuration this world was created with.</summary>
         public SimConfig Config { get { return _config; } }
@@ -180,9 +178,8 @@ namespace UNDPWR.Core
             sleepResult.ThrowIfFailed("PxwWorldSetSleepParams");
 
             SimLog.Info(string.Format(
-                "World created: {0} Hz, local input delay {1} ticks, {2} snapshot history, {3} backend, " +
-                "sleep after {4} ticks",
-                _config.TickRate, _config.LocalInputDelay, _config.SnapshotHistory, _config.Backend,
+                "World created: {0} Hz, {1} snapshot history, {2} backend, sleep after {3} ticks",
+                _config.TickRate, _config.SnapshotHistory, _config.Backend,
                 _config.SleepTicks == 0 ? "never" : _config.SleepTicks.ToString()));
         }
 
@@ -437,42 +434,6 @@ namespace UNDPWR.Core
             NativeMethods.PxwWorldStep(_world, _config.FixedDeltaTime);
         }
 
-        /// <summary>
-        /// Begins a tick without waiting for it, for overlapping simulation with other
-        /// work. Must be paired with <see cref="FetchResults"/> before any state is read.
-        /// </summary>
-        public void Simulate()
-        {
-            ThrowIfDisposed();
-            NativeMethods.PxwWorldSimulate(_world, _config.FixedDeltaTime);
-        }
-
-        /// <summary>Completes a tick started by <see cref="Simulate"/>.</summary>
-        public void FetchResults()
-        {
-            ThrowIfDisposed();
-            NativeMethods.PxwWorldFetchResults(_world);
-        }
-
-        /// <summary>
-        /// Discards the simulation state PhysX carries between steps. A manual
-        /// hard-resynchronisation tool only.
-        /// </summary>
-        /// <remarks>
-        /// The rollback path never calls this: the cold-step discipline re-poses every body
-        /// each step, which invalidates PhysX's contact cache, so restore + step is already
-        /// a pure function of the restored state and there is no residue to remove. Calling
-        /// this on every restore is actively harmful under variable-depth rollback, because
-        /// peers rewind by different amounts and would reset a different number of times.
-        /// Reserve it for a deliberate, one-shot hard resynchronisation, where discarding
-        /// history is the explicit intent.
-        /// </remarks>
-        public void ResetContactState(SimContactResetMode mode)
-        {
-            ThrowIfDisposed();
-            NativeMethods.PxwWorldResetContactStateEx(_world, (uint)mode);
-        }
-
         // ---------------------------------------------------------------- state ----
 
         /// <summary>Bytes required for a full snapshot of the current registry.</summary>
@@ -631,118 +592,6 @@ namespace UNDPWR.Core
         }
 
         /// <summary>
-        /// Reads the PhysX-assigned identity of every registered body, in stable-ID order.
-        /// </summary>
-        /// <remarks>
-        /// Indices are assigned when an actor enters a scene, so call this after the
-        /// first <see cref="CommitPending"/> and step.
-        /// </remarks>
-        /// <param name="count">How many records were written.</param>
-        /// <returns>
-        /// A buffer reused between calls, valid until the next call. Copy anything that
-        /// needs to outlive it.
-        /// </returns>
-        public unsafe SimInternalIdEntry[] ReadInternalIds(out int count)
-        {
-            ThrowIfDisposed();
-
-            int capacity = (int)NativeMethods.PxwWorldGetEntryCount(_world);
-            if (_internalIdScratch.Length < capacity)
-            {
-                _internalIdScratch = new SimInternalIdEntry[capacity];
-            }
-
-            fixed (SimInternalIdEntry* dst = _internalIdScratch)
-            {
-                count = (int)NativeMethods.PxwWorldReadInternalIds(_world, dst, (uint)_internalIdScratch.Length);
-            }
-            return _internalIdScratch;
-        }
-
-        /// <summary>
-        /// Hashes the mapping from stable ID to PhysX's internal indices.
-        /// </summary>
-        /// <remarks>
-        /// Peers exchange this once, after the world is built and stepped. Equal hashes
-        /// mean every peer put the same body in the same place in PhysX's internal
-        /// ordering, which is a precondition for their simulations agreeing at all.
-        /// <para>
-        /// Unequal hashes mean the registration order differs, and no amount of state
-        /// synchronisation will fix it: the solver visits bodies in index order, so the
-        /// peers sum contact impulses differently and round differently. The resulting
-        /// desync is gradual and gives no hint of its cause, which is exactly why it is
-        /// worth catching up front. Use <see cref="CompareInternalIds"/> to find out
-        /// which body is misplaced.
-        /// </para>
-        /// </remarks>
-        public ulong HashInternalIds()
-        {
-            ThrowIfDisposed();
-            return NativeMethods.PxwWorldHashInternalIds(_world);
-        }
-
-        /// <summary>
-        /// Compares this world's stable-ID to PhysX-index mapping against a peer's and
-        /// describes the first disagreement.
-        /// </summary>
-        /// <param name="peer">
-        /// Records from another peer, as produced by <see cref="ReadInternalIds"/>.
-        /// </param>
-        /// <param name="peerCount">How many of <paramref name="peer"/> are meaningful.</param>
-        /// <param name="problem">
-        /// A description of the disagreement, or <c>null</c> when the mappings match.
-        /// </param>
-        /// <returns><c>true</c> when the two peers agree.</returns>
-        public unsafe bool CompareInternalIds(SimInternalIdEntry[] peer, int peerCount, out string problem)
-        {
-            ThrowIfDisposed();
-
-            if (peer == null)
-            {
-                throw new ArgumentNullException("peer");
-            }
-
-            int localCount;
-            SimInternalIdEntry[] local = ReadInternalIds(out localCount);
-
-            if (localCount != peerCount)
-            {
-                problem = string.Format(
-                    "Peers registered different numbers of bodies: {0} locally, {1} remotely. " +
-                    "Every peer must register the same set of entities before stepping.",
-                    localCount, peerCount);
-                return false;
-            }
-
-            for (int i = 0; i < localCount; i++)
-            {
-                if (local[i].StableId != peer[i].StableId)
-                {
-                    problem = string.Format(
-                        "Registration order differs at position {0}: this peer has stable ID {1}, " +
-                        "the other has {2}. Entities must be committed in ascending stable-ID order.",
-                        i, local[i].StableId, peer[i].StableId);
-                    return false;
-                }
-
-                if (local[i].InternalActorIndex != peer[i].InternalActorIndex ||
-                    local[i].IslandNodeIndex != peer[i].IslandNodeIndex)
-                {
-                    problem = string.Format(
-                        "Stable ID {0} was given different PhysX identities: actor index {1} vs {2}, " +
-                        "island node {3} vs {4}. The peers will diverge once this body touches another.",
-                        local[i].StableId,
-                        local[i].InternalActorIndex, peer[i].InternalActorIndex,
-                        local[i].IslandNodeIndex, peer[i].IslandNodeIndex);
-                    return false;
-                }
-            }
-
-            problem = null;
-            return true;
-        }
-
-        /// <summary>
         /// Hashes how every registered body was built, as opposed to what state it is in.
         /// </summary>
         /// <remarks>
@@ -768,102 +617,14 @@ namespace UNDPWR.Core
         /// specifically designed not to reflect small shape differences. A single ULP in one
         /// spike's local pose leaves the mass hash and the state hash identical, and desyncs
         /// the ball within a couple of seconds of it being squeezed between two other
-        /// bodies. Use <see cref="CompareConstruction"/> to find out which body differs.
+        /// bodies. The authoritative admission handshake rejects the aggregate mismatch before
+        /// either endpoint enters the timeline.
         /// </para>
         /// </remarks>
         public ulong HashConstruction()
         {
             ThrowIfDisposed();
             return NativeMethods.PxwWorldHashConstruction(_world);
-        }
-
-        /// <summary>
-        /// Reads the per-body construction hashes, in stable-ID order.
-        /// </summary>
-        /// <param name="count">How many of the returned entries are meaningful.</param>
-        /// <returns>
-        /// A buffer reused between calls; copy anything that must outlive the next call.
-        /// </returns>
-        public unsafe SimEntryHash[] ReadConstructionHashes(out int count)
-        {
-            ThrowIfDisposed();
-
-            int capacity = (int)NativeMethods.PxwWorldGetEntryCount(_world);
-            if (_constructionScratch.Length < capacity)
-            {
-                _constructionScratch = new SimEntryHash[capacity];
-            }
-
-            fixed (SimEntryHash* dst = _constructionScratch)
-            {
-                count = (int)NativeMethods.PxwWorldHashConstructionPerEntry(
-                    _world, dst, (uint)_constructionScratch.Length);
-            }
-            return _constructionScratch;
-        }
-
-        /// <summary>
-        /// Compares how this peer built its bodies against how another peer built theirs,
-        /// and describes the first disagreement.
-        /// </summary>
-        /// <param name="peer">
-        /// Records from another peer, as produced by <see cref="ReadConstructionHashes"/>.
-        /// </param>
-        /// <param name="peerCount">How many of <paramref name="peer"/> are meaningful.</param>
-        /// <param name="problem">
-        /// A description of the disagreement, or <c>null</c> when the two peers built the
-        /// same bodies.
-        /// </param>
-        /// <returns><c>true</c> when the two peers agree.</returns>
-        public unsafe bool CompareConstruction(SimEntryHash[] peer, int peerCount, out string problem)
-        {
-            ThrowIfDisposed();
-
-            if (peer == null)
-            {
-                throw new ArgumentNullException("peer");
-            }
-
-            int localCount;
-            SimEntryHash[] local = ReadConstructionHashes(out localCount);
-
-            if (localCount != peerCount)
-            {
-                problem = string.Format(
-                    "Peers registered different numbers of bodies: {0} locally, {1} remotely. " +
-                    "Every peer must register the same set of entities before stepping.",
-                    localCount, peerCount);
-                return false;
-            }
-
-            for (int i = 0; i < localCount; i++)
-            {
-                if (local[i].StableId != peer[i].StableId)
-                {
-                    problem = string.Format(
-                        "Registration order differs at position {0}: this peer has stable ID {1}, " +
-                        "the other has {2}. Entities must be committed in ascending stable-ID order.",
-                        i, local[i].StableId, peer[i].StableId);
-                    return false;
-                }
-
-                if (local[i].Hash != peer[i].Hash)
-                {
-                    problem = string.Format(
-                        "Stable ID {0} was built differently on the two peers (construction hash 0x{1:X16} " +
-                        "vs 0x{2:X16}). The shapes, their local poses or offsets, the materials, the mass, " +
-                        "the solver iteration counts or the depenetration clamp differ. Every peer must " +
-                        "build this entity from identical values; note that a compound of offset shapes has " +
-                        "one geometry, local pose and material per shape to get right, and that a one-ULP " +
-                        "difference in any of them is enough to desync the body once it is squeezed between " +
-                        "two others while leaving it in perfect agreement until then.",
-                        local[i].StableId, local[i].Hash, peer[i].Hash);
-                    return false;
-                }
-            }
-
-            problem = null;
-            return true;
         }
 
         /// <summary>

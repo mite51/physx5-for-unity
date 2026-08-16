@@ -29,8 +29,8 @@ shipping decisions the summary above is the operative part.
 ## The GPU backend is not cross-machine deterministic
 
 `SimBackendMode.GpuExperimental` has no cross-machine determinism guarantee (driver, card and
-block scheduling all vary), so a networked world refuses to start on it unless
-`AllowExperimentalGpuNetworking` is set. Single-player and presentation-only worlds are fine.
+block scheduling all vary), so `SimNetConfig.Validate` rejects it for authoritative sessions.
+There is no networking bypass. Non-networked and presentation-only worlds may still select it.
 See [Configuration](Configuration.md#the-gpu-backend).
 
 ## Contact points and impulses are not bit-exact across a rollback

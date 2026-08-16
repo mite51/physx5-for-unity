@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using NUnit.Framework;
-using PhysX5ForUnity;
 using UNDPWR.Core;
 using UNDPWR.Diagnostics;
 using UNDPWR.Interop;
@@ -11,9 +10,8 @@ using UNDPWR.Rollback;
 namespace UNDPWR.Tests
 {
     /// <summary>
-    /// Tests for the transport layer's pure-managed pieces: the wire codec, the loopback
-    /// network, and the desync detector. The full <see cref="SimSession"/> loop needs a native
-    /// world and is exercised by the multi-peer harness that can reach it.
+    /// Tests for the transport layer's pure-managed pieces: authoritative wire codecs,
+    /// scheduling, loopback delivery, adaptive lead, and desync detection.
     /// </summary>
     public class SimNetTests
     {
@@ -33,58 +31,6 @@ namespace UNDPWR.Tests
         public void Restore()
         {
             SimLog.Level = _savedLevel;
-        }
-
-        [Test]
-        public void DetachNativeSinkClearsPointerAfterManagedStateWasReset()
-        {
-            int nativeMessages = 0;
-            IntPtr firstMaterial = IntPtr.Zero;
-            IntPtr secondMaterial = IntPtr.Zero;
-            Action<SimLog.Verbosity, string> listener = delegate(SimLog.Verbosity level, string message)
-            {
-                if (message.Contains("Create rigid material"))
-                {
-                    nativeMessages += 1;
-                }
-            };
-
-            try
-            {
-                SimLog.Level = SimLog.Verbosity.Info;
-                SimLog.MessageLogged += listener;
-                SimLog.AttachNativeSink();
-
-                firstMaterial = Physx.CreatePxMaterial(0.5f, 0.5f, 0.0f);
-                Assert.Greater(nativeMessages, 0, "the native callback was not installed");
-
-                // Emulate a Unity domain reload: managed statics reset while the native DLL
-                // remains loaded and still owns the old function pointer.
-                System.Reflection.FieldInfo callbackField = typeof(SimLog).GetField(
-                    "_nativeCallback",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                Assert.IsNotNull(callbackField);
-                callbackField.SetValue(null, null);
-
-                nativeMessages = 0;
-                SimLog.DetachNativeSink();
-                secondMaterial = Physx.CreatePxMaterial(0.5f, 0.5f, 0.0f);
-                Assert.AreEqual(0, nativeMessages,
-                    "DetachNativeSink left the stale callback installed in the native DLL");
-            }
-            finally
-            {
-                SimLog.DetachNativeSink();
-                SimLog.MessageLogged -= listener;
-                if (firstMaterial != IntPtr.Zero)
-                {
-                    Physx.ReleasePxMaterial(firstMaterial);
-                }
-                if (secondMaterial != IntPtr.Zero)
-                {
-                    Physx.ReleasePxMaterial(secondMaterial);
-                }
-            }
         }
 
         // ------------------------------------------------------------ wire codec ----
@@ -177,6 +123,25 @@ namespace UNDPWR.Tests
             SimRebuildState state = new SimRebuildState();
             state.ResumeTick = 1234;
             state.PlayerIds = new uint[] { 7u, 3u, 42u };
+            state.LastInputs = new SimInput[]
+            {
+                SimInput.Neutral(7u, 1234),
+                SimInput.Neutral(3u, 1234),
+                SimInput.Neutral(42u, 1234)
+            };
+            state.LastInputs[1].Buttons = 0x55;
+            state.LastInputSequences = new uint[] { 10, 11, 12 };
+            state.PendingEvents = new SimAuthoritativeEvent[]
+            {
+                new SimAuthoritativeEvent
+                {
+                    PlayerId = 3,
+                    Sequence = 8,
+                    Tick = 1240,
+                    TypeId = 4,
+                    Payload = new byte[] { 6, 7 }
+                }
+            };
             state.PhysicsHash = 0x0123456789ABCDEFul;
             state.PhysicsData = new byte[] { 1, 2, 3, 4, 5 };
             state.PhysicsSize = 5;
@@ -190,6 +155,11 @@ namespace UNDPWR.Tests
 
             Assert.AreEqual(state.ResumeTick, restored.ResumeTick);
             CollectionAssert.AreEqual(state.PlayerIds, restored.PlayerIds);
+            Assert.AreEqual(0x55u, restored.LastInputs[1].Buttons);
+            CollectionAssert.AreEqual(state.LastInputSequences, restored.LastInputSequences);
+            Assert.AreEqual(1, restored.PendingEvents.Length);
+            Assert.AreEqual(1240, restored.PendingEvents[0].Tick);
+            CollectionAssert.AreEqual(new byte[] { 6, 7 }, restored.PendingEvents[0].Payload);
             Assert.AreEqual(state.PhysicsHash, restored.PhysicsHash);
             Assert.AreEqual(state.PhysicsSize, restored.PhysicsSize);
             CollectionAssert.AreEqual(state.PhysicsData, restored.PhysicsData);
@@ -201,7 +171,7 @@ namespace UNDPWR.Tests
         [Test]
         public void RebuildDecodeRejectsWrongMessageKind()
         {
-            byte[] notRebuild = { (byte)SimMessageKind.Hash, 0, 0, 0, 0 };
+            byte[] notRebuild = { (byte)SimMessageKind.ServerHash, 1, 0, 0, 0 };
             Assert.Throws<SimWireFormatException>(
                 () => SimRebuildCodec.Decode(notRebuild, 0, notRebuild.Length));
         }
@@ -229,22 +199,21 @@ namespace UNDPWR.Tests
         // ------------------------------------------------------- loopback network ----
 
         [Test]
-        public void BroadcastReachesEveryPeerButTheSender()
+        public void DirectedSendAuthenticatesTheSender()
         {
             SimLoopbackNetwork network = new SimLoopbackNetwork();
-            ISimTransport a = network.CreateEndpoint();
-            ISimTransport b = network.CreateEndpoint();
-            ISimTransport c = network.CreateEndpoint();
+            ISimTransport server = network.CreateEndpoint(0);
+            ISimTransport client = network.CreateEndpoint(7);
 
             byte[] payload = { 1, 2, 3 };
-            a.Broadcast(payload, 0, payload.Length);
+            client.Send(0, payload, 0, payload.Length, SimDelivery.Unreliable);
             network.Step();
 
-            ArraySegment<byte> message;
-            Assert.IsFalse(a.TryReceive(out message), "sender must not receive its own broadcast");
-            Assert.IsTrue(b.TryReceive(out message));
-            Assert.AreEqual(3, message.Count);
-            Assert.IsTrue(c.TryReceive(out message));
+            SimTransportMessage message;
+            Assert.IsFalse(client.TryReceive(out message), "sender must not receive its own message");
+            Assert.IsTrue(server.TryReceive(out message));
+            Assert.AreEqual(7u, message.SenderId);
+            Assert.AreEqual(3, message.Payload.Count);
         }
 
         [Test]
@@ -252,20 +221,114 @@ namespace UNDPWR.Tests
         {
             SimLoopbackNetwork network = new SimLoopbackNetwork();
             network.Latency = 3;
-            ISimTransport a = network.CreateEndpoint();
-            ISimTransport b = network.CreateEndpoint();
+            ISimTransport a = network.CreateEndpoint(1);
+            ISimTransport b = network.CreateEndpoint(2);
 
             byte[] payload = { 9 };
-            a.Broadcast(payload, 0, payload.Length);
+            a.Send(2, payload, 0, payload.Length, SimDelivery.Unreliable);
 
-            ArraySegment<byte> message;
+            SimTransportMessage message;
             network.Step();
             Assert.IsFalse(b.TryReceive(out message), "1 of 3 steps");
             network.Step();
             Assert.IsFalse(b.TryReceive(out message), "2 of 3 steps");
             network.Step();
             Assert.IsTrue(b.TryReceive(out message), "delivered on the third step");
-            Assert.AreEqual(9, message.Array[message.Offset]);
+            Assert.AreEqual(9, message.Payload.Array[message.Payload.Offset]);
+        }
+
+        [Test]
+        public void ReliableMessagesIgnoreConfiguredPacketLoss()
+        {
+            SimLoopbackNetwork network = new SimLoopbackNetwork();
+            network.LossPercent = 100;
+            ISimTransport server = network.CreateEndpoint(0);
+            ISimTransport client = network.CreateEndpoint(1);
+            byte[] payload = { 4, 2 };
+
+            client.Send(0, payload, 0, payload.Length, SimDelivery.ReliableOrdered);
+            network.Step();
+
+            SimTransportMessage message;
+            Assert.IsTrue(server.TryReceive(out message));
+            Assert.AreEqual(SimDelivery.ReliableOrdered, message.Delivery);
+        }
+
+        [Test]
+        public void InputProposalRoundTripsWithProtocolHeader()
+        {
+            SimInputProposal proposal = new SimInputProposal();
+            proposal.Sequence = 17;
+            proposal.RequestedTick = 44;
+            proposal.CapturedAtMicroseconds = 1234567;
+            proposal.Input = SimInput.Neutral(7, 44);
+            proposal.Input.Buttons = 0xAA;
+            byte[] bytes = SimProtocolCodec.EncodeInputProposal(ref proposal);
+
+            SimByteReader reader = new SimByteReader(bytes, 0, bytes.Length);
+            Assert.AreEqual(SimMessageKind.InputProposal, SimProtocol.ReadHeader(ref reader));
+            SimInputProposal restored = SimProtocolCodec.ReadInputProposal(ref reader);
+            Assert.AreEqual(proposal.Sequence, restored.Sequence);
+            Assert.AreEqual(proposal.RequestedTick, restored.RequestedTick);
+            Assert.AreEqual(proposal.CapturedAtMicroseconds, restored.CapturedAtMicroseconds);
+            Assert.AreEqual(proposal.Input, restored.Input);
+        }
+
+        [Test]
+        public void CanonicalFrameRoundTripsEveryPlayer()
+        {
+            SimCanonicalFrame frame = new SimCanonicalFrame();
+            frame.Epoch = 3;
+            frame.Tick = 10;
+            frame.Inputs = new SimCanonicalInput[2];
+            frame.Inputs[0].Sequence = 4;
+            frame.Inputs[0].RequestedTick = 10;
+            frame.Inputs[0].Input = SimInput.Neutral(1, 10);
+            frame.Inputs[1].Sequence = 8;
+            frame.Inputs[1].RequestedTick = 9;
+            frame.Inputs[1].Input = SimInput.Neutral(2, 10);
+            frame.Inputs[1].Input.Buttons = 7;
+            frame.Events = new SimAuthoritativeEvent[]
+            {
+                new SimAuthoritativeEvent
+                {
+                    PlayerId = 2,
+                    Sequence = 9,
+                    Tick = 10,
+                    TypeId = 3,
+                    Payload = new byte[] { 1, 2, 3 }
+                }
+            };
+
+            byte[] bytes = SimProtocolCodec.EncodeCanonicalFrame(frame);
+            SimByteReader reader = new SimByteReader(bytes, 0, bytes.Length);
+            Assert.AreEqual(SimMessageKind.CanonicalFrame, SimProtocol.ReadHeader(ref reader));
+            SimCanonicalFrame restored = SimProtocolCodec.ReadCanonicalFrame(ref reader);
+            Assert.AreEqual(3u, restored.Epoch);
+            Assert.AreEqual(10, restored.Tick);
+            Assert.AreEqual(2, restored.Inputs.Length);
+            Assert.AreEqual(7u, restored.Inputs[1].Input.Buttons);
+            Assert.AreEqual(1, restored.Events.Length);
+            Assert.AreEqual(9u, restored.Events[0].Sequence);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, restored.Events[0].Payload);
+        }
+
+        [Test]
+        public void AdaptiveLeadRaisesQuicklyAfterRetiming()
+        {
+            SimNetConfig config = SimNetConfig.Authoritative;
+            SimAdaptiveInputLead lead = new SimAdaptiveInputLead(config, 60);
+            lead.RecordDecision(SimAdmissionDisposition.Retimed, 1000);
+            lead.RecordDecision(SimAdmissionDisposition.Retimed, 2000);
+            Assert.AreEqual(config.InitialInputLead + 1, lead.CurrentLead);
+        }
+
+        [Test]
+        public void ProtocolRejectsAnUnknownVersion()
+        {
+            byte[] bytes = { (byte)SimMessageKind.ClockPing, 99, 0 };
+            SimByteReader reader = new SimByteReader(bytes, 0, bytes.Length);
+            Assert.Throws<SimWireFormatException>(() => SimProtocol.ReadHeader(ref reader));
         }
 
         // -------------------------------------------------------- desync detector ----
@@ -341,76 +404,6 @@ namespace UNDPWR.Tests
 
             string difference = SimEntityHashDiff.Describe(a, 2, b, 2, 7u, 100);
             StringAssert.Contains("not in the same order", difference);
-        }
-
-        private static SimInternalIdEntry Entry(uint stableId, uint kind, uint actorIndex, ulong islandNode)
-        {
-            SimInternalIdEntry entry = new SimInternalIdEntry();
-            entry.StableId = stableId;
-            entry.Kind = kind;
-            entry.InternalActorIndex = actorIndex;
-            entry.IslandNodeIndex = islandNode;
-            return entry;
-        }
-
-        [Test]
-        public void RegistrationCheckAcceptsIdenticalTables()
-        {
-            SimInternalIdEntry[] a = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-            SimInternalIdEntry[] b = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-
-            string problem;
-            Assert.IsTrue(SimRegistrationCheck.Compare(a, 2, b, 2, out problem));
-            Assert.IsNull(problem);
-        }
-
-        [Test]
-        public void RegistrationCheckIgnoresIslandNode()
-        {
-            // The island node index changes when a body sleeps or wakes, so two peers a few ticks
-            // apart legitimately hold different values for the same body. Comparing it would report
-            // a desync every time the ball came to rest, so the check must not look at it.
-            SimInternalIdEntry[] a = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-            SimInternalIdEntry[] b = { Entry(1, 0, 0, 999), Entry(2, 0, 1, 12345) };
-
-            string problem;
-            Assert.IsTrue(SimRegistrationCheck.Compare(a, 2, b, 2, out problem),
-                "island node differences must not be reported: " + problem);
-        }
-
-        [Test]
-        public void RegistrationCheckNamesABodyWithADifferentActorIndex()
-        {
-            // The classic bug: the same framework entity is a different body inside PhysX, so the
-            // solver visits it in a different order and the peers drift after the first contact.
-            SimInternalIdEntry[] a = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-            SimInternalIdEntry[] b = { Entry(1, 0, 1, 10), Entry(2, 0, 0, 11) };
-
-            string problem;
-            Assert.IsFalse(SimRegistrationCheck.Compare(a, 2, b, 2, out problem));
-            StringAssert.Contains("Stable ID 1", problem);
-        }
-
-        [Test]
-        public void RegistrationCheckNamesADifferentBodyCount()
-        {
-            SimInternalIdEntry[] a = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-            SimInternalIdEntry[] b = { Entry(1, 0, 0, 10) };
-
-            string problem;
-            Assert.IsFalse(SimRegistrationCheck.Compare(a, 2, b, 1, out problem));
-            StringAssert.Contains("different numbers of bodies", problem);
-        }
-
-        [Test]
-        public void RegistrationCheckNamesADifferentBuildOrder()
-        {
-            SimInternalIdEntry[] a = { Entry(1, 0, 0, 10), Entry(2, 0, 1, 11) };
-            SimInternalIdEntry[] b = { Entry(2, 0, 0, 11), Entry(1, 0, 1, 10) };
-
-            string problem;
-            Assert.IsFalse(SimRegistrationCheck.Compare(a, 2, b, 2, out problem));
-            StringAssert.Contains("Registration order differs", problem);
         }
 
         [Test]

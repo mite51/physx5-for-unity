@@ -15,9 +15,29 @@ tagged release, so everything to date sits under **Unreleased**.
 
 ## [Unreleased]
 
-Snapshot format: `kStateVersion = 3`. Config hash covers, among others, `Solver` and
-`TickRate`. It no longer covers any prediction-horizon field: the clock is always
-free-running and the lead is peer-local.
+Snapshot format: `kStateVersion = 3`. Authoritative wire protocol:
+`SimProtocol.Version = 2`. Canonical frames now include their authoritative event set, and
+rebuild payloads include held canonical inputs plus pending future events.
+
+### Authoritative server rewrite (breaking)
+
+- Replaced peer `SimSession` and broadcast transport with `SimServerSession`,
+  `SimClientSession`, authenticated directed sends, and explicit unreliable/reliable-ordered
+  delivery.
+- Added future input proposals, server retiming/rejection decisions, complete canonical frames,
+  speculative/authoritative provenance, redundant delivery, and out-of-order sequence handling.
+- Added RTT/jitter adaptive lead, an eight-step default per-frame simulation budget, incremental
+  replay, catch-up telemetry, and automatic server rebuild at the hard backlog/history limit.
+- Added reliable deterministic event proposals with presentation anticipation callbacks, a
+  rollback-external authoritative event timeline, canonical-frame event delivery, and rebuild
+  retention for future events.
+- The server now runs the deterministic world and owns confirmed hashes, construction admission
+  checks, join snapshots, and desync recovery snapshots.
+- Removed `LocalInputDelay`, zero-delay networking, configurable TGS, `SimSession`, peer
+  registration helpers, alternate simulate/fetch stepping, contact-reset surface, rebuild
+  overloads, and the `recreateWorld` switch. Rebuild always recreates the native world.
+- Retained `GpuExperimental` only for non-networked worlds; authoritative policy rejects it.
+- Default snapshot history increased from 32 to 64 ticks.
 
 ### Added
 

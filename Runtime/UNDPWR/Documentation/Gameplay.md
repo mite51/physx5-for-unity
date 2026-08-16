@@ -5,9 +5,8 @@ state, things that spawn and die, scores and phases and timers, players who driv
 a camera that makes "forward" mean forward. The `Gameplay/` layer is all of that, built as a
 generic framework and wired into a single [`SimGameHost`](../Gameplay/Game/SimGameHost.cs).
 
-It is optional — a world driven straight through `ISimStepHandler` still works — but it is the
-intended way to build a game, and it deletes the two most error-prone mechanisms a hand-rolled
-system tends to grow (action undo and a pooling creation log).
+Authoritative sessions use this layer directly: `SimClientSession` and `SimServerSession`
+share its action queue for deterministic network events.
 
 ## The three channels, in gameplay terms
 
@@ -126,6 +125,12 @@ host.Actions.RegisterActionType(() => new DespawnAction());
 Execution order within a tick is submission order, which is deterministic because every peer
 runs the same gameplay to produce the same submissions.
 
+For a player-originated network event, submit the registered action through
+`SimClientSession.SubmitEvent`. The server assigns its tick and inserts it into its action
+queue, then reliably sends the same serialized action to every client. Use `EventAnticipated`
+for immediate cosmetic feedback and `EventResolved` to accept, retime or cancel that feedback.
+Do not execute the action locally from the anticipation callback.
+
 ## Game modes
 
 [`ISimGameMode`](../Gameplay/Game/ISimGameMode.cs) is the single seam your rules plug into: what
@@ -212,8 +217,8 @@ with [`SimInputEncoder`](../Gameplay/Input/SimInputEncoder.cs) and an
 
 ```csharp
 ISimInputFrameProvider frame = new SimOrbitInputFrame(cameraTransform);
-SimInput input = SimInputEncoder.BuildInput(playerId, engine.LocalInputTick, buttons, rawMove, frame);
-session.SubmitLocalInput(input);
+SimInput input = SimInputEncoder.BuildInput(playerId, 0, buttons, rawMove, frame);
+client.SubmitLocalInput(input, nowMicroseconds); // assigns the adaptive future server tick
 ```
 
 The encoder resolves the stick against the camera locally, then **quantizes and dequantizes**
@@ -247,6 +252,10 @@ The direction is the whole point: poses flow out of the simulation into transfor
 back. A binder that read `transform.position` into the sim would let a render-rate quantity into
 a deterministic computation and desync.
 
+The same one-way rule applies to anticipation. `InputAnticipated` may move a camera, select an
+animation or play a cosmetic effect immediately; the authoritative physics body still moves
+only from its scheduled `SimInput`.
+
 ## Putting it together
 
 ```csharp
@@ -260,15 +269,17 @@ host.Begin();
 var binder = new SimPresentationBinder(world, host.Registry);
 binder.Rebuild();
 
-var session = new SimSession(engine, transport, config, localPlayerId, playerIds);
-session.Start();
+var network = SimNetConfig.Authoritative;
+var client = new SimClientSession(
+    engine, transport, config, network, localPlayerId, playerIds, host.Actions);
+client.Start(nowMicroseconds);
 
 // FixedUpdate
-session.Pump();
-session.SubmitLocalInput(SampleInput());
-engine.Advance();
-session.PublishConfirmed();
-binder.Sample();
+client.Pump(nowMicroseconds);
+client.SubmitLocalInput(SampleInput(), nowMicroseconds);
+client.Advance();
+if (!engine.IsCatchingUp)
+    binder.Sample();
 
 // Update
 binder.Render(Mathf.Clamp01((Time.time - lastFixed) / Time.fixedDeltaTime));

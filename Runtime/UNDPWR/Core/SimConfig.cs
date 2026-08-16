@@ -21,35 +21,10 @@ namespace UNDPWR.Core
         /// PhysX makes no cross-machine determinism guarantee for GPU simulation: results
         /// depend on the driver, the card and the scheduling of thousands of concurrent
         /// blocks, none of which are reproducible across peers. Use it for single-player
-        /// or presentation-only worlds. A networked <see cref="DeterministicWorld"/>
-        /// refuses to start in this mode unless
-        /// <see cref="SimConfig.AllowExperimentalGpuNetworking"/> is set, and logs an
-        /// error explaining why when it does.
+        /// or presentation-only worlds. Authoritative sessions reject this backend through
+        /// their network policy; the toggle remains available for non-networked worlds.
         /// </remarks>
         GpuExperimental = 1
-    }
-
-    /// <summary>
-    /// Which constraint solver PhysX runs. Mirrors <c>PxSolverType</c>.
-    /// </summary>
-    /// <remarks>
-    /// This choice reaches further than solver quality, because it decides whether replay
-    /// is transparent, and transparency is what a variable rollback depth rests on. See
-    /// <see cref="SimConfig.Solver"/>.
-    /// </remarks>
-    public enum SimSolverType
-    {
-        /// <summary>
-        /// Projected Gauss-Seidel. The only solver measured to make replay bitwise
-        /// transparent under the cold-step discipline.
-        /// </summary>
-        ProjectedGaussSeidel = 0,
-
-        /// <summary>
-        /// Temporal Gauss-Seidel. Carries per-substep state that a restore does not reach,
-        /// so replay is never transparent. The current default.
-        /// </summary>
-        TemporalGaussSeidel = 1
     }
 
     /// <summary>
@@ -82,50 +57,17 @@ namespace UNDPWR.Core
         public int TickRate = 60;
 
         /// <summary>
-        /// How many ticks ahead of the tick it is simulating a peer stamps its own input.
-        /// </summary>
-        /// <remarks>
-        /// Peer-local, and deliberately not hashed. An input carries the tick it applies to
-        /// and is applied at that tick whenever it arrives, so a peer delaying by two and a
-        /// peer delaying by five still simulate the identical input timeline. This is the
-        /// one timing field a session does not have to agree on, though a competitive game
-        /// will want to agree on it anyway for fairness.
-        /// <para>
-        /// What it buys is mispredictions that never happen. A remote input is first
-        /// guessed <c>LocalInputDelay</c> ticks after its sender produced it, so anything
-        /// that crosses the network faster than that is already in hand before the guess is
-        /// made. Below the delay there is nothing to correct; above it, prediction and
-        /// rollback take over as before.
-        /// </para>
-        /// <para>
-        /// The cost is exactly what it sounds like: the local player's own action happens
-        /// this many ticks after they asked for it. The default spends 33 ms of that to
-        /// stop remote players snapping on every input change, which is the trade most
-        /// games want. Zero restores the older behaviour of stamping input for the current
-        /// tick, the most responsive setting and the one that mispredicts most.
-        /// </para>
-        /// </remarks>
-        [Tooltip("Ticks of delay applied to local input before it is stamped. Peer-local; need not match.")]
-        public int LocalInputDelay = 2;
-
-        /// <summary>
         /// How many past ticks of state are retained, bounding rollback distance and
         /// deciding both how far back a late input can still be applied and how far ahead of
         /// the confirmed tick the clock may run.
         /// </summary>
         /// <remarks>
-        /// Peer-local and not hashed: a peer that retains more history than another
-        /// simulates no differently, it just tolerates a later input and a larger lead. It
-        /// has to cover the whole live window, which runs from the confirmed tick out to the
-        /// furthest tick input has been stamped for, so <see cref="Validate"/> requires it to
-        /// exceed <see cref="LocalInputDelay"/> plus at least one tick of lead. The clock is
-        /// free-running: the lead over the confirmed tick is emergent, growing when
-        /// confirmations lag and capped at <c>SnapshotHistory - LocalInputDelay - 1</c> so
-        /// the ring always retains the whole window. That cap, not a shared constant, is what
-        /// a peer stalls against when it runs too far ahead.
+        /// Peer-local and not hashed: retaining more history changes recovery capacity, not
+        /// deterministic simulation. The authoritative network policy validates that this
+        /// ring covers its input lead and hard-resync thresholds.
         /// </remarks>
-        [Tooltip("Snapshots retained. Must exceed LocalInputDelay plus one tick of lead.")]
-        public int SnapshotHistory = 32;
+        [Tooltip("Snapshots retained for rollback and authoritative recovery.")]
+        public int SnapshotHistory = 64;
 
         // ------------------------------------------------------------ simulation ----
 
@@ -133,35 +75,12 @@ namespace UNDPWR.Core
         public Vector3 Gravity = new Vector3(0.0f, -9.81f, 0.0f);
 
         /// <summary>
-        /// Which constraint solver runs. Hashed, since a session cannot mix the two, and
-        /// required to be PGS for a networked session.
+        /// Solver position iterations applied to every dynamic body.
         /// </summary>
         /// <remarks>
-        /// PGS is the default and the only solver <see cref="Validate"/> accepts. The Phase 1
-        /// measurement (Documentation/AdaptiveRollbackPlan.md §4) chose it: PGS is bitwise
-        /// transparent under the cold-step discipline across every workload the framework is
-        /// measured on — box grids, stacks up to eight deep, a settled character capsule, a
-        /// 40x mass ratio, and articulations on both a free-swinging and a grounded chain — so
-        /// two peers can roll back by different depths and still agree. TGS is not: it carries
-        /// per-substep state a restore does not reach, and it diverges under variable depth on
-        /// a grid at impact, on deep stacks and on every cold-step transparency test, holding
-        /// only on quiet, shallow scenes. The rollback engine rewinds by whatever depth a
-        /// misprediction reaches and leads by whatever the network allows, so it requires that
-        /// transparency and therefore requires PGS.
-        /// <para>
-        /// The cost is small and bounded. On a 16-high stack PGS-cold actually settles
-        /// quieter than TGS-cold (residual 0.000146 m/s against 0.003556 m/s) though it sags
-        /// about 68 µm more; the one real limit is that a contact chain deeper than eight
-        /// bodies defeats variable rollback depth on <em>either</em> solver, which is a
-        /// content constraint the native chain-depth diagnostic measures rather than a solver
-        /// choice. The enum retains <see cref="SimSolverType.TemporalGaussSeidel"/> for its
-        /// interop numbering, but a networked <see cref="SimConfig"/> may not select it.
-        /// </para>
+        /// UNDPWR always uses Projected Gauss-Seidel. Solver selection is deliberately not a
+        /// public option because TGS carries state snapshots cannot restore.
         /// </remarks>
-        [Tooltip("Constraint solver. Must match on every peer. PGS is required. See AdaptiveRollbackPlan.md.")]
-        public SimSolverType Solver = SimSolverType.ProjectedGaussSeidel;
-
-        /// <summary>Solver position iterations applied to every dynamic body.</summary>
         public uint SolverPositionIterations = 8;
 
         /// <summary>Solver velocity iterations applied to every dynamic body.</summary>
@@ -241,12 +160,6 @@ namespace UNDPWR.Core
         public SimBackendMode Backend = SimBackendMode.Cpu;
 
         /// <summary>
-        /// Permits a networked session to run on the GPU backend despite the lack of any
-        /// cross-machine determinism guarantee. For experiments only.
-        /// </summary>
-        public bool AllowExperimentalGpuNetworking = false;
-
-        /// <summary>
         /// PhysX worker threads. Zero keeps the simulation on the calling thread.
         /// </summary>
         /// <remarks>
@@ -296,29 +209,9 @@ namespace UNDPWR.Core
                 reason = "TickRate must be positive.";
                 return false;
             }
-            if (LocalInputDelay < 0)
+            if (SnapshotHistory < 2)
             {
-                reason = "LocalInputDelay cannot be negative.";
-                return false;
-            }
-            if (SnapshotHistory <= LocalInputDelay + 1)
-            {
-                reason = string.Format(
-                    "SnapshotHistory ({0}) must exceed LocalInputDelay ({1}) plus at least one tick of lead. The " +
-                    "ring has to span the live window from the confirmed tick out to the furthest tick input has " +
-                    "been stamped for, and leave room for the clock to run at least one tick ahead of confirmation; " +
-                    "below that a tick a rollback still needs has already been overwritten.",
-                    SnapshotHistory, LocalInputDelay);
-                return false;
-            }
-            if (Solver != SimSolverType.ProjectedGaussSeidel)
-            {
-                reason =
-                    "A networked session requires the ProjectedGaussSeidel solver. The rollback engine rewinds by " +
-                    "whatever depth a misprediction reaches and leads by whatever the network allows, which only " +
-                    "lands on the same state a full re-simulation would when replay is bitwise transparent -- the " +
-                    "property the Phase 1 measurement (AdaptiveRollbackPlan.md §4) found for PGS alone. Under TGS a " +
-                    "data-dependent rewind desyncs silently.";
+                reason = "SnapshotHistory must retain at least two ticks.";
                 return false;
             }
             if (DefaultDensity <= 0.0f)
@@ -331,15 +224,6 @@ namespace UNDPWR.Core
                 reason = "MassIsotropyTolerance must be in [0, 1).";
                 return false;
             }
-            if (Backend == SimBackendMode.GpuExperimental && !AllowExperimentalGpuNetworking)
-            {
-                reason =
-                    "The GPU backend has no cross-machine determinism guarantee, so it cannot be used for a " +
-                    "networked session. Set AllowExperimentalGpuNetworking to override this for local " +
-                    "experiments.";
-                return false;
-            }
-
             reason = null;
             return true;
         }
@@ -354,11 +238,8 @@ namespace UNDPWR.Core
         /// affect diagnostics, such as <see cref="DisablePvd"/>, are excluded so that a
         /// peer running with the debugger attached is not rejected.
         /// <para>
-        /// <see cref="LocalInputDelay"/> and <see cref="SnapshotHistory"/> are excluded for
-        /// a different reason: they are peer-local latency choices that change when a peer
-        /// produces an input and how long it keeps a snapshot, never what the simulation
-        /// does with either. Hashing them would reject a session over a difference that
-        /// cannot desync it.
+        /// <see cref="SnapshotHistory"/> is excluded because it changes recovery capacity,
+        /// never the simulation result.
         /// </para>
         /// </remarks>
         public ulong ComputeHash()
@@ -368,7 +249,6 @@ namespace UNDPWR.Core
             hash = SimHash.Combine(hash, Gravity.x);
             hash = SimHash.Combine(hash, Gravity.y);
             hash = SimHash.Combine(hash, Gravity.z);
-            hash = SimHash.Combine(hash, (int)Solver);
             hash = SimHash.Combine(hash, (int)SolverPositionIterations);
             hash = SimHash.Combine(hash, (int)SolverVelocityIterations);
             hash = SimHash.Combine(hash, BounceThresholdVelocity);
@@ -407,7 +287,8 @@ namespace UNDPWR.Core
             // different gameplay decision.
             desc.PruningStructureType = 1;
 
-            desc.SolverType = (int)Solver;
+            // PxSolverType::ePGS. Fixed because TGS cannot replay transparently.
+            desc.SolverType = 0;
 
             desc.BroadPhaseType = -1;
             desc.CpuWorkerThreads = CpuWorkerThreads;

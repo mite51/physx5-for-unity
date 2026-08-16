@@ -12,7 +12,7 @@ namespace UNDPWR.Rollback
     /// every peer back on one identical history — and this is the payload that carries it.
     /// It is a plain data holder so it can be produced by <see cref="RollbackEngine.CaptureRebuildState"/>
     /// on the peer that owns the timeline (the host), moved over whatever transport the game
-    /// uses, and handed to <see cref="RollbackEngine.PrepareForRebuild(ref SimRebuildState, bool)"/>
+    /// uses, and handed to <see cref="RollbackEngine.PrepareForRebuild(ref SimRebuildState, Action)"/>
     /// on every peer including the joiner.
     /// <para>
     /// The roster is part of the package on purpose. The engine fixes its player set at
@@ -34,6 +34,15 @@ namespace UNDPWR.Rollback
 
         /// <summary>The sorted player-ID set the resumed session runs with.</summary>
         public uint[] PlayerIds;
+
+        /// <summary>The last canonical command held for each player at the resume tick.</summary>
+        public SimInput[] LastInputs;
+
+        /// <summary>The proposal sequence associated with each held canonical command.</summary>
+        public uint[] LastInputSequences;
+
+        /// <summary>Server-assigned events scheduled strictly after the resume tick.</summary>
+        public SimAuthoritativeEvent[] PendingEvents;
 
         /// <summary>The opaque native physics blob.</summary>
         public byte[] PhysicsData;
@@ -73,6 +82,29 @@ namespace UNDPWR.Rollback
             if (PlayerIds != null)
             {
                 Array.Copy(PlayerIds, copy.PlayerIds, PlayerIds.Length);
+            }
+            copy.LastInputs = new SimInput[LastInputs == null ? 0 : LastInputs.Length];
+            if (LastInputs != null)
+            {
+                Array.Copy(LastInputs, copy.LastInputs, LastInputs.Length);
+            }
+            copy.LastInputSequences = new uint[
+                LastInputSequences == null ? 0 : LastInputSequences.Length];
+            if (LastInputSequences != null)
+            {
+                Array.Copy(LastInputSequences, copy.LastInputSequences, LastInputSequences.Length);
+            }
+            copy.PendingEvents = new SimAuthoritativeEvent[
+                PendingEvents == null ? 0 : PendingEvents.Length];
+            if (PendingEvents != null)
+            {
+                for (int i = 0; i < PendingEvents.Length; ++i)
+                {
+                    copy.PendingEvents[i] = PendingEvents[i];
+                    byte[] payload = PendingEvents[i].Payload ?? new byte[0];
+                    copy.PendingEvents[i].Payload = new byte[payload.Length];
+                    Array.Copy(payload, copy.PendingEvents[i].Payload, payload.Length);
+                }
             }
 
             copy.PhysicsData = Slice(PhysicsData, PhysicsSize);

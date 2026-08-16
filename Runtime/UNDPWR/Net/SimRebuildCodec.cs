@@ -4,29 +4,57 @@ namespace UNDPWR.Net
 {
     /// <summary>
     /// Serialises a <see cref="SimRebuildState"/> to the wire and back, so the agreed rebuild
-    /// state can travel over whatever reliable channel the game already runs.
+    /// state travels over the authoritative session's reliable ordered channel.
     /// </summary>
     /// <remarks>
     /// The rebuild payload is large and loss-sensitive — every peer must apply the exact same
     /// bytes — so unlike inputs it belongs on a reliable transport, and unlike a
-    /// <see cref="SimMessageKind.Handshake"/> it is not something <see cref="SimSession"/>
-    /// puts on the wire itself. The game drives the rebuild handshake (who sends, when every
-    /// peer is ready) and uses this codec for the payload. The layout is the same hand-rolled
-    /// little-endian form as the rest of <see cref="SimByteWriter"/>, so it is endian-stable.
+    /// input and canonical-frame traffic it must arrive exactly once. The layout is the same
+    /// hand-rolled little-endian form as the rest of <see cref="SimByteWriter"/>.
     /// </remarks>
     public static class SimRebuildCodec
     {
         /// <summary>Appends a rebuild payload to a writer, tagged with its message kind.</summary>
         public static void Write(ref SimByteWriter writer, ref SimRebuildState state)
         {
-            writer.WriteByte((byte)SimMessageKind.Rebuild);
+            SimProtocol.WriteHeader(ref writer, SimMessageKind.Rebuild);
             writer.WriteInt32(state.ResumeTick);
 
             uint[] players = state.PlayerIds ?? EmptyPlayers;
+            if (players.Length > SimProtocol.MaxPlayers)
+            {
+                throw new System.ArgumentException("Rebuild roster exceeds the protocol player limit.", "state");
+            }
             writer.WriteUInt16((ushort)players.Length);
             for (int i = 0; i < players.Length; ++i)
             {
                 writer.WriteUInt32(players[i]);
+            }
+            for (int i = 0; i < players.Length; ++i)
+            {
+                uint sequence = state.LastInputSequences != null
+                    && i < state.LastInputSequences.Length
+                    ? state.LastInputSequences[i]
+                    : 0;
+                SimInput input = state.LastInputs != null && i < state.LastInputs.Length
+                    ? state.LastInputs[i]
+                    : SimInput.Neutral(players[i], state.ResumeTick);
+                input.PlayerId = players[i];
+                input.Tick = state.ResumeTick;
+                writer.WriteUInt32(sequence);
+                SimInputCodec.Write(ref writer, input);
+            }
+            SimAuthoritativeEvent[] events =
+                state.PendingEvents ?? new SimAuthoritativeEvent[0];
+            if (events.Length > SimProtocol.MaxPendingEvents)
+            {
+                throw new System.ArgumentException(
+                    "Rebuild exceeds the pending-event limit.", "state");
+            }
+            writer.WriteUInt16((ushort)events.Length);
+            for (int i = 0; i < events.Length; ++i)
+            {
+                SimProtocolCodec.WriteAuthoritativeEvent(ref writer, events[i]);
             }
 
             writer.WriteUInt64(state.PhysicsHash);
@@ -39,14 +67,14 @@ namespace UNDPWR.Net
         public static byte[] Encode(ref SimRebuildState state)
         {
             SimByteWriter writer = new SimByteWriter(
-                32 + state.PhysicsSize + state.EntitySize + state.GameSize);
+                32 + (state.PlayerIds == null ? 0 : state.PlayerIds.Length * 36)
+                + state.PhysicsSize + state.EntitySize + state.GameSize);
             Write(ref writer, ref state);
             return writer.ToArray();
         }
 
         /// <summary>
-        /// Reads a rebuild payload from a reader whose message-kind byte has already been
-        /// consumed and confirmed to be <see cref="SimMessageKind.Rebuild"/>.
+        /// Reads a rebuild payload from a reader whose protocol header has already been consumed.
         /// </summary>
         public static SimRebuildState ReadBody(ref SimByteReader reader)
         {
@@ -54,10 +82,36 @@ namespace UNDPWR.Net
             state.ResumeTick = reader.ReadInt32();
 
             int playerCount = reader.ReadUInt16();
+            if (playerCount > SimProtocol.MaxPlayers)
+            {
+                throw new SimWireFormatException("rebuild roster exceeds the player limit");
+            }
             state.PlayerIds = new uint[playerCount];
             for (int i = 0; i < playerCount; ++i)
             {
                 state.PlayerIds[i] = reader.ReadUInt32();
+            }
+            state.LastInputs = new SimInput[playerCount];
+            state.LastInputSequences = new uint[playerCount];
+            for (int i = 0; i < playerCount; ++i)
+            {
+                state.LastInputSequences[i] = reader.ReadUInt32();
+                state.LastInputs[i] = SimInputCodec.Read(ref reader);
+            }
+            int eventCount = reader.ReadUInt16();
+            if (eventCount > SimProtocol.MaxPendingEvents)
+            {
+                throw new SimWireFormatException("rebuild exceeds the pending-event limit");
+            }
+            state.PendingEvents = new SimAuthoritativeEvent[eventCount];
+            for (int i = 0; i < eventCount; ++i)
+            {
+                state.PendingEvents[i] = SimProtocolCodec.ReadAuthoritativeEvent(ref reader);
+                if (state.PendingEvents[i].Tick <= state.ResumeTick)
+                {
+                    throw new SimWireFormatException(
+                        "rebuild contains an event at or before its resume tick");
+                }
             }
 
             state.PhysicsHash = reader.ReadUInt64();
@@ -77,7 +131,7 @@ namespace UNDPWR.Net
         public static SimRebuildState Decode(byte[] bytes, int offset, int length)
         {
             SimByteReader reader = new SimByteReader(bytes, offset, length);
-            SimMessageKind kind = (SimMessageKind)reader.ReadByte();
+            SimMessageKind kind = SimProtocol.ReadHeader(ref reader);
             if (kind != SimMessageKind.Rebuild)
             {
                 throw new SimWireFormatException("expected a Rebuild message, got kind " + (byte)kind);

@@ -184,16 +184,7 @@ namespace UNDPWR.Interop
         internal static extern int PxwWorldSetSleepParams(IntPtr world, float linearThreshold, float angularThreshold, uint sleepTicks);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void PxwWorldSimulate(IntPtr world, float dt);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void PxwWorldFetchResults(IntPtr world);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void PxwWorldStep(IntPtr world, float dt);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void PxwWorldResetContactStateEx(IntPtr world, uint mode);
 
         // --------------------------------------------------------------- state ----
 
@@ -219,16 +210,7 @@ namespace UNDPWR.Interop
         internal static extern unsafe uint PxwWorldReadArticulationLinkPoses(IntPtr world, uint stableId, SimTransform* dst, uint capacity);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern unsafe uint PxwWorldReadInternalIds(IntPtr world, SimInternalIdEntry* dst, uint capacity);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern ulong PxwWorldHashInternalIds(IntPtr world);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern ulong PxwWorldHashConstruction(IntPtr world);
-
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern unsafe uint PxwWorldHashConstructionPerEntry(IntPtr world, SimEntryHash* dst, uint capacity);
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern unsafe ulong PxwHashBuffer(void* src, uint size);

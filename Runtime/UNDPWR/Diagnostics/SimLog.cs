@@ -75,7 +75,9 @@ namespace UNDPWR.Diagnostics
         /// Clears any callback pointer retained by the native DLL from an earlier managed
         /// domain. Native plugins survive Unity domain reloads; managed delegates do not.
         /// </summary>
+#if UNITY_5_3_OR_NEWER
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+#endif
         private static void ResetNativeSink()
         {
             // Do not use the managed field as the source of truth here. After a domain reload it
