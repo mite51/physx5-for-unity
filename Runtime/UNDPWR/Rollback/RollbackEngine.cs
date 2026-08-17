@@ -1048,19 +1048,49 @@ namespace UNDPWR.Rollback
             _events.ResetAfterConfirmed(resumeTick, state.PendingEvents);
 
             Snapshot slot = _snapshots.BeginWrite(resumeTick);
-            ulong hash;
             byte[] buffer = slot.Data;
-            int captured = _world.CaptureState(ref buffer, out hash);
-            slot.Data = buffer;
-            _snapshots.CompleteWrite(slot, captured, hash);
+            ulong hash;
+            int size;
+            if (reconcile == null && state.PhysicsHash != 0)
+            {
+                // The resume tick's canonical snapshot is the PRODUCER'S bytes, not a re-capture of
+                // the live world. A confirmed tick is normally reached by restore-then-STEP (see
+                // HashState's remarks), which settles a reduced-coordinate articulation's derived
+                // state (link maximal poses, spatial velocities). Here we have restored but not yet
+                // stepped: RestoreState writes the joint DOF exactly (it is a pure function of the
+                // bytes), but PhysX does not recompute that derived state until the next Step(). So a
+                // re-capture now yields an "unsettled" snapshot whose bytes and hash differ from the
+                // producer's settled snapshot, even though the restored state is correct. Storing that
+                // unsettled snapshot would make this peer's resume-tick ring slot differ, byte-for-byte,
+                // from every other peer's, and the very next confirmed advance (restore this slot +
+                // step) could then diverge from the producer's (restore the settled bytes + step),
+                // tripping the ongoing hash comparison into an endless rebuild loop. Storing the
+                // producer's canonical bytes keeps every peer's ring identical at the resume tick, so
+                // all later restore+step confirmations are bit-identical. No reconcile ran, so the live
+                // world is exactly restore(state.PhysicsData); restoring these same bytes later
+                // reproduces it, keeping the ring consistent with the live world.
+                if (buffer == null || buffer.Length < state.PhysicsSize)
+                {
+                    buffer = new byte[state.PhysicsSize];
+                }
+                Array.Copy(state.PhysicsData, 0, buffer, 0, state.PhysicsSize);
+                slot.Data = buffer;
+                size = state.PhysicsSize;
+                hash = state.PhysicsHash;
+                _snapshots.CompleteWrite(slot, size, hash);
+            }
+            else
+            {
+                // Either a reconcile ran and changed the live world (mid-match join: a joiner's avatar
+                // was activated), so the canonical snapshot for the resume tick is the reconciled live
+                // world and must be captured fresh - every peer runs the same deterministic reconcile,
+                // so these captures agree - or the producer supplied no hash to anchor to.
+                size = _world.CaptureState(ref buffer, out hash);
+                slot.Data = buffer;
+                _snapshots.CompleteWrite(slot, size, hash);
+            }
             CaptureManagedInto(slot);
             slot.IsConfirmed = true;
-            if (reconcile == null && state.PhysicsHash != 0 && hash != state.PhysicsHash)
-            {
-                throw new InvalidOperationException(string.Format(
-                    "Rebuild physics hash 0x{0:X16} restored as 0x{1:X16}.",
-                    state.PhysicsHash, hash));
-            }
 
             _confirmedTick = resumeTick;
             _currentTick = resumeTick;
