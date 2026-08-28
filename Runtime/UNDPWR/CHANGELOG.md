@@ -202,28 +202,29 @@ rebuild payloads include held canonical inputs plus pending future events.
 
 ### Fixed
 
-- **A session everybody started together could fork on a contested contact, while the same
-  workload agreed for anyone who joined mid-match.** Setup builds the scene in the order it runs
-  — every pool add, then a disable across the whole pool, then an enable for whatever the game mode
-  spawned — and a `PxScene` carries the shape of that history internally. Two peers running
-  identical setup code therefore reach identical *contents* by different routes, and nothing the
-  framework compares can see the difference: it is not construction, which hashes the blueprint
-  and matched exactly, and it is not state, which hashes poses and velocities that also matched.
-  The arrangement only decides anything when a contact configuration is close enough to a tie for
-  the solver's visiting order to pick the winner — two players pressing a ball between them from
-  opposite sides — at which point the peers resolve it differently and the physics channel forks on
-  one tick with every other channel still in agreement. A mid-match joiner was immune for an
-  incidental reason: `PrepareForRebuild` recreates the native world, which re-adds every entity to
-  a fresh scene in stable-ID order, the one arrangement each peer reaches independently of how it
-  got there. `SimGameHost.Begin` now recreates too, after `OnSessionStart` so it captures the final
-  enabled set and before `Initialise` so tick zero is taken from the recreated scene, which makes
-  the two join paths identical. Recreating at setup loses nothing, because nothing has moved yet.
-  Note that this changes simulation results, and the construction hash — which is what the join
-  handshake compares — does not change with it, so a peer on an older build will pass admission
-  and then desync; ship every peer together. The soccer sample's harness covers the case that
-  failed: `RunPreStartRepro` drives both players onto the ball from a pre-start join and asserts
-  the peers agree, and `TwinHostRepro` pins that two independently built worlds driven identically
-  never diverge on their own.
+- **Every host simulated a differently arranged scene than its clients, which forked on a
+  contested contact.** A scene carries an internal arrangement shaped by the order things were
+  added to it. Setup adds in its own order — every pool registration, then a disable across the
+  pool, then an enable for whatever the game mode spawned — while recreating the native world
+  re-adds every entity to a fresh scene in stable-ID order. Both reach the same contents by
+  different routes, and nothing the framework compares can tell them apart: construction hashes
+  the blueprint and a snapshot hashes poses and velocities, so both match either way. Since the
+  authoritative rewrite the server hands a rebuild to every client it admits, and applying a
+  rebuild recreates — so the host ran the setup-built arrangement and every client ran the
+  recreated one, on every session, from the first tick. It stayed harmless until a contact was
+  close enough to a tie for the arrangement to pick the winner — two players pressing a ball
+  between them from opposite sides — at which point the two sides resolved it differently and the
+  physics channel forked on one tick with every other channel still in agreement.
+  `SimGameHost.Begin` now recreates as well, after `OnSessionStart` so it captures the final
+  enabled set and before `Initialise` so tick zero is taken from the recreated scene, which puts
+  the host on the same arrangement its clients are already on. Recreating at setup loses nothing,
+  because nothing has moved yet. Note that this changes simulation results while the construction
+  hash — which is what the join handshake compares — does not change with it, so a peer on an
+  older build will pass admission and then desync; ship every peer together. The soccer sample's
+  harness covers it: `RunPreStartRepro` drives both players onto the ball and asserts the peers
+  agree, and `TwinHostRepro` pins the control case, two hosts that are both setup-built and
+  therefore symmetric, which agreed throughout and is what localised the fault to the asymmetry
+  rather than to the workload.
 
 - **No session had ever actually enabled `eENABLE_ENHANCED_DETERMINISM`, and every session had
   enabled CCD.** `SimSceneFlags` claimed to mirror `pxw::PxwSceneFlag` and did not: it declared

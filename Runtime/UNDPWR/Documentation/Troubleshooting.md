@@ -91,24 +91,30 @@ Use the reported channel:
 
 Enable `PerEntityHashDiagnostics` while diagnosing a physics mismatch.
 
-## Only a session everybody started together desyncs
+## A fork on a near-tie contact, with every other channel agreeing
 
-A physics-channel fork on one tick, with the entity and game channels still in agreement, on a
-contact tight enough to be near a tie — several bodies pressing one body from opposite sides — and
-only for peers present before the session started. Anyone who joined mid-match, or left and
-rejoined, is fine.
+A physics-channel fork on a single tick, entity and game channels still in agreement, on a contact
+tight enough to be near a tie — several bodies pressing one body from opposite sides.
 
-That pattern means the two `PxScene` objects hold the same bodies in a different internal
-arrangement, which is invisible to both hashes: construction covers the blueprint and state covers
-poses and velocities, and those all match. Recreating the native world normalises it by re-adding
-every entity in stable-ID order, which is why the joining path was immune — it recreates on every
-rebuild. `SimGameHost.Begin` now recreates during setup so both paths match, so if you see this
-while driving `RollbackEngine` or `DeterministicWorld` yourself, call
-`DeterministicWorld.RecreateNativeWorld` once after your world is fully built and before the first
-capture.
+That pattern means the peers hold the same bodies in a different internal *arrangement*, which is
+invisible to both hashes: construction covers the blueprint and state covers poses and velocities,
+and those all match. A scene's arrangement follows the order things were added to it, so a world
+left as setup built it and a world that has been recreated — re-added in stable-ID order — are
+arranged differently despite holding the same contents.
 
-Because construction is unchanged by this, the join handshake cannot detect a peer running an
-older build; it will be admitted and then desync. Update every peer together.
+The trap is that the server hands a rebuild to every client it admits and applying a rebuild
+recreates, so clients are on the recreated arrangement whether they joined early or late. The host
+must be too. `SimGameHost.Begin` does this for you; if you drive `RollbackEngine` or
+`DeterministicWorld` yourself, call `DeterministicWorld.RecreateNativeWorld` once after the world
+is fully built and before the first capture.
+
+Symptoms of this are load-dependent, not deterministic in the reporting sense: an asymmetric pair
+agrees indefinitely until a contact happens to land near a tie, so "it only desyncs on
+`<some specific event>`" is expected, and a path that has never desynced is not evidence that it
+is symmetric.
+
+Because construction is unchanged by any of this, the join handshake cannot detect a peer running
+an older build; it will be admitted and then desync. Update every peer together.
 
 ## A vehicle rides high or steers badly
 

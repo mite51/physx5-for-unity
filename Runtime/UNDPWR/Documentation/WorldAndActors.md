@@ -64,15 +64,18 @@ registration.
 history than the peers that committed it at the boundary — never do it.
 
 Sorting the commit is necessary but not sufficient, because a scene also carries the shape of
-everything else done to it — every later commit, enable and disable. Two peers whose setup differs
-only in the *route* it took to the same contents can end up arranged differently, and neither hash
-can see it: construction covers the blueprint and state covers poses and velocities, and both
-match. It stays harmless until a contact is close enough to a tie for the solver's visiting order
-to decide it, and then the peers pick differently. So finish setup with one
-`DeterministicWorld.RecreateNativeWorld`, which re-adds everything to a fresh scene in stable-ID
-order — the one arrangement every peer reaches independently. Nothing has moved yet, so it costs
-nothing. `SimGameHost.Begin` already does this for you; do it yourself only when you build a world
-without the game host.
+everything else done to it — every later commit, enable and disable. So a world left as setup built
+it is arranged differently from one that has been recreated, which re-adds everything to a fresh
+scene in stable-ID order, even though the contents are identical. Neither hash can see the
+difference: construction covers the blueprint and state covers poses and velocities, and both match
+either way. It stays harmless until a contact is close enough to a tie for the arrangement to
+decide it, and then two peers on different arrangements pick differently.
+
+Peers therefore have to agree on *which* arrangement, and recreated is the one to standardise on,
+because a client cannot avoid it — the server hands every admitted client a rebuild and applying a
+rebuild recreates. So finish setup with one `DeterministicWorld.RecreateNativeWorld`. Nothing has
+moved yet, so it costs nothing. `SimGameHost.Begin` already does this for you; do it yourself only
+when you build a world without the game host.
 
 ## Registering Unity PhysX actors
 
