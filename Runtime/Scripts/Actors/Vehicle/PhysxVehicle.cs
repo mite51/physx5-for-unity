@@ -48,8 +48,17 @@ namespace PhysX5ForUnity
         [Tooltip("Chassis physics material. If empty a default material is created.")]
         public PhysxMaterial chassisMaterial;
 
-        [Tooltip("Optional chassis collision geometry. If empty the fallback box (boxHalfExtents) is used.")]
+        [Tooltip("Optional chassis collision geometry. If empty the fallback box (boxHalfExtents) is used. " +
+                 "A mesh must be convex: PhysX cannot use a triangle mesh as a dynamic body's collision shape.")]
         public PhysxGeometry chassisGeometry;
+
+        [Tooltip("Local pose of the chassis collision shape, in vehicle-local space. Applies to " +
+                 "chassisGeometry as well as to the fallback box. Leave at zero to centre the " +
+                 "shape on the vehicle origin.")]
+        public Vector3 chassisShapeOffset = Vector3.zero;
+
+        [Tooltip("Local rotation of the chassis collision shape, in vehicle-local space.")]
+        public Vector3 chassisShapeRotation = Vector3.zero;
 
         [Header("Frame")]
         public PxVehicleAxes longitudinalAxis = PxVehicleAxes.ePosZ;
@@ -127,7 +136,7 @@ namespace PhysX5ForUnity
 
             if (chassisGeometry == null)
                 chassisGeometry = GetComponent<PhysxGeometry>();
-            IntPtr geometryPtr = (chassisGeometry != null) ? chassisGeometry.NativeObjectPtr : IntPtr.Zero;
+            IntPtr geometryPtr = ValidateChassisGeometry() ? chassisGeometry.NativeObjectPtr : IntPtr.Zero;
 
             PxwVehicleChassisDesc chassis = BuildChassisDesc();
             int nativeDriveMode = (driveType == VehicleDriveType.Engine)
@@ -245,6 +254,42 @@ namespace PhysX5ForUnity
             return material.NativeObjectPtr;
         }
 
+        /// <summary>
+        /// Decides whether <see cref="chassisGeometry"/> can serve as the chassis collision
+        /// shape, logging why not when it cannot. Returning false falls the vehicle back to the
+        /// box built from <see cref="boxHalfExtents"/>, which is what a null geometry does.
+        /// </summary>
+        private bool ValidateChassisGeometry()
+        {
+            if (chassisGeometry == null) return false;
+
+            // A dynamic rigid body cannot collide using a triangle mesh, so PhysX would reject
+            // the shape deep inside the SDK with no indication of which vehicle caused it.
+            PhysxTriangleMeshGeometry meshGeometry = chassisGeometry as PhysxTriangleMeshGeometry;
+            if (meshGeometry != null && !meshGeometry.IsConvex)
+            {
+                Debug.LogError(
+                    $"PhysxVehicle '{name}': chassis geometry '{chassisGeometry.name}' is a triangle mesh. " +
+                    "PhysX cannot use a triangle mesh as a dynamic body's collision shape; tick Is Convex " +
+                    "on the geometry so it cooks a convex hull. Falling back to the box.", this);
+                return false;
+            }
+
+            // Mesh geometries bake lossyScale into the cooked shape at creation time, and the
+            // vehicle actor carries the root transform on top of that, so a scaled chassis
+            // geometry collides at a different size than it renders.
+            Vector3 scale = chassisGeometry.transform.lossyScale;
+            if (!Mathf.Approximately(scale.x, 1.0f) || !Mathf.Approximately(scale.y, 1.0f) || !Mathf.Approximately(scale.z, 1.0f))
+            {
+                Debug.LogWarning(
+                    $"PhysxVehicle '{name}': chassis geometry '{chassisGeometry.name}' has scale " +
+                    $"{scale.x:0.###}, {scale.y:0.###}, {scale.z:0.###}. Author the collision shape at " +
+                    "unit scale; a scaled transform does not scale the chassis shape predictably.", this);
+            }
+
+            return true;
+        }
+
         private PxwVehicleChassisDesc BuildChassisDesc()
         {
             Vector3 moi = momentOfInertia;
@@ -265,7 +310,7 @@ namespace PhysX5ForUnity
                 moi = moi,
                 cmassLocalPose = new PxTransformData(centerOfMass, Quaternion.identity),
                 boxHalfExtents = boxHalfExtents,
-                boxLocalPose = new PxTransformData(Vector3.zero, Quaternion.identity)
+                shapeLocalPose = new PxTransformData(chassisShapeOffset, Quaternion.Euler(chassisShapeRotation))
             };
         }
 
@@ -279,6 +324,42 @@ namespace PhysX5ForUnity
                 scale = lengthScale
             };
             Physx.SetVehicleFrame(m_nativeObjectPtr, ref frame);
+        }
+
+        /// <summary>
+        /// Warns when a wheel is set to simulate but nothing stops it colliding with the road.
+        /// </summary>
+        /// <remarks>
+        /// This is the one wheel-shape setting that can break the handling model rather than
+        /// merely change it. The suspension raycast and tire model already resolve the wheel
+        /// against the ground, and the wheel sits with its contact patch exactly at the surface,
+        /// so a simulating wheel also generates ordinary rigid contacts there: the road is
+        /// resolved twice, the vehicle rides high on the doubled normal force, and contact
+        /// friction fights the tire model's steering forces. Giving wheels a group that does not
+        /// collide with the drivable surface is what makes the setting usable, and it leaves the
+        /// wheels free to hit walls, obstacles and other vehicles.
+        /// </remarks>
+        private void WarnIfWheelCollisionIsUnfiltered(PhysxVehicleWheelAttachment wheel)
+        {
+            if (!wheel.isSimulationShape) return;
+
+            if (wheel.collisionGroup == PhysxCollisionGroups.DefaultGroup)
+            {
+                Debug.LogWarning(
+                    $"PhysxVehicle '{name}': wheel '{wheel.name}' is a simulation shape but is in the " +
+                    $"default collision group, so it collides with the road as well as being driven by " +
+                    $"the suspension raycast and tire model. Put wheels in their own group and call " +
+                    $"PhysxCollisionGroups.SetPairCollides(wheelGroup, roadGroup, false) during world " +
+                    $"setup, or the vehicle will ride high and steer badly.", this);
+            }
+
+            if (wheel.geometryMode == PxwVehicleWheelGeometryMode.CookedPrism)
+            {
+                Debug.LogWarning(
+                    $"PhysxVehicle '{name}': wheel '{wheel.name}' is a simulation shape using the cooked " +
+                    $"prism geometry. The prism's facets turn with the wheel, so contacts chatter as it " +
+                    $"spins. Set Geometry Mode to Cylinder for a rotationally invariant shape.", this);
+            }
         }
 
         private void ConfigureAxlesAndWheels()
@@ -313,6 +394,10 @@ namespace PhysX5ForUnity
 
                 PxwVehicleWheelDesc wheelDesc = w.GetWheelDesc();
                 Physx.SetVehicleWheelParams(m_nativeObjectPtr, id, ref wheelDesc);
+
+                PxwVehicleWheelShapeDesc shapeDesc = w.GetWheelShapeDesc();
+                WarnIfWheelCollisionIsUnfiltered(w);
+                Physx.SetVehicleWheelShapeParams(m_nativeObjectPtr, id, ref shapeDesc, w.GetCollisionGeometryPtr());
 
                 PxwVehicleSuspensionDesc suspDesc = w.GetSuspensionDesc(transform, sprungMassFallback);
                 if (suspDesc.sprungMass <= 0.0f) suspDesc.sprungMass = sprungMassFallback;

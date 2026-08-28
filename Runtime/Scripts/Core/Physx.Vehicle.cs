@@ -32,6 +32,14 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern void SetVehicleWheelParams(IntPtr vehicle, int wheelId, ref PxwVehicleWheelDesc desc);
 
+        /// <summary>
+        /// Configures a wheel's collision shape. Must be called before FinalizeVehicle, which is
+        /// where the actor and its shapes are built. <paramref name="geometry"/> is only read when
+        /// the descriptor's mode is <see cref="PxwVehicleWheelGeometryMode.Geometry"/>.
+        /// </summary>
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetVehicleWheelShapeParams(IntPtr vehicle, int wheelId, ref PxwVehicleWheelShapeDesc desc, IntPtr geometry);
+
         [DllImport(PHYSX_DLL)]
         public static extern void SetVehicleSuspensionParams(IntPtr vehicle, int wheelId, ref PxwVehicleSuspensionDesc desc);
 

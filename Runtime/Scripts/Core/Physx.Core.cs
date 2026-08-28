@@ -152,6 +152,26 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern void SetShapeLocalPose(IntPtr shape, ref PxTransformData pose);
 
+        // Collision filtering. See PhysxCollisionGroups for what the words mean and why the
+        // group table has to be configured identically on every peer of a networked session.
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetShapeSimulationFilterData(IntPtr shape, uint word0, uint word1, uint word2, uint word3);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetShapeQueryFilterData(IntPtr shape, uint word0, uint word1, uint word2, uint word3);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetShapeSimulationFilterData(IntPtr shape, [Out] uint[] destWords);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void SetGroupCollisionFlag(uint group0, uint group1, bool enable);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern bool GetGroupCollisionFlag(uint group0, uint group1);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void ResetGroupCollisionFlags();
+
         [DllImport(PHYSX_DLL)]
         public static extern void ReleaseShape(IntPtr shape);
 

@@ -16,7 +16,7 @@ start; this is the full guide.
 | [The gameplay layer](Gameplay.md) | Entities, pooling, actions, game modes, the game host's fixed tick order, players and camera-relative input, presentation. The recommended way to build a game. |
 | [Networking](Networking.md) | The `ISimTransport` seam, the session loop, the handshake, desync detection, and mid-match join. |
 | [Simulation APIs](SimulationAPIs.md) | Forces (`SimBody`), scene queries (`SimQuery`), and contact/trigger events (`SimContacts`), and their determinism rules. |
-| [Vehicles and articulations](VehiclesAndArticulations.md) | Handle kinds and registering non-rigid bodies; vehicle commands as input. |
+| [Vehicles and articulations](VehiclesAndArticulations.md) | Handle kinds and registering non-rigid bodies; vehicle commands as input; wheel collision shapes and the filtering they require. |
 | [Configuration](Configuration.md) | Every `SimConfig` field, hashed vs peer-local, the PGS requirement, sleeping, the GPU backend. |
 | [Limits and platforms](LimitsAndPlatforms.md) | The same-architecture requirement, contact/wake bit-exactness caveats, chain depth, GPU, the PhysX patch dependency. |
 | [Troubleshooting](Troubleshooting.md) | Symptom-to-cause tables for desyncs and stalls, and the classic mistakes. |

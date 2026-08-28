@@ -175,14 +175,29 @@ namespace UNDPWR.Net
             uint[] roster = new uint[count];
             for (int i = 0; i < count; ++i) roster[i] = reader.ReadUInt32();
 
+            bool claimedIdentityMatches = claimedId == senderId;
+            bool knownPlayer = senderId != SimProtocol.ServerPeerId
+                && Array.BinarySearch(_playerIds, senderId) >= 0;
+            bool simulationMatches = simulationHash == _simulation.ComputeHash();
+            bool networkMatches = networkHash == _network.ComputeHash();
+            bool constructionMatches = constructionHash == _engine.ConstructionHash;
+            bool rosterMatches = SameRoster(roster);
             accepted = accepted
-                && claimedId == senderId
-                && senderId != SimProtocol.ServerPeerId
-                && Array.BinarySearch(_playerIds, senderId) >= 0
-                && simulationHash == _simulation.ComputeHash()
-                && networkHash == _network.ComputeHash()
-                && constructionHash == _engine.ConstructionHash
-                && SameRoster(roster);
+                && claimedIdentityMatches
+                && knownPlayer
+                && simulationMatches
+                && networkMatches
+                && constructionMatches
+                && rosterMatches;
+            if (!accepted)
+            {
+                SimLog.Warning(string.Format(
+                    "Rejected ClientHello from peer {0}: reliable={1}, claimedId={2}, "
+                    + "knownPlayer={3}, simulation={4}, network={5}, construction={6}, roster={7}",
+                    senderId, delivery == SimDelivery.ReliableOrdered, claimedId,
+                    knownPlayer, simulationMatches, networkMatches, constructionMatches,
+                    rosterMatches));
+            }
             if (accepted)
             {
                 _clients.Add(senderId);

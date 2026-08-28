@@ -75,6 +75,46 @@ rebuild payloads include held canonical inputs plus pending future events.
   per-step derived output is recomputed. `PxwVehicle` exposes `CaptureState` / `RestoreState`;
   `nbWheels` and drive mode are stored on the world entry at register time and fold into
   per-entry hashing. **Bumped `kStateVersion` to 3.**
+- **Collision filtering, and the group table as hashed construction state.** Per-shape
+  simulation and query filter data plus PhysX's group collision table are reachable through
+  `PhysxCollisionGroups`. The table decides whether two shapes collide at all, so peers that
+  disagree about it simulate differently while every actor, shape and geometry still hashes
+  identically — and because PhysXExtensions keeps it as process-global state, nothing else in
+  the construction hash can stand in for it. `PxwWorldHashConstruction` therefore folds it in,
+  contributing only the *disabled* pairs in a fixed order, so a world that never touches groups
+  hashes exactly as it did before. `ResetToDefault` exists because the table outlives any one
+  world; call it at teardown. Snapshot format and config hash unchanged.
+- **Convex core geometry and configurable vehicle wheel shapes.**
+  `PhysxCylinderGeometry`, `PhysxConeGeometry` and `PhysxEllipsoidGeometry` wrap PhysX 5.6's
+  `PxConvexCoreGeometry` — an analytic core swept by a margin, resolved by GJK — and their core
+  type, dimensions and margin all participate in the construction hash. Only the active core's
+  bytes are hashed, because `PxConvexCoreGeometry` leaves the unused tail of its fixed core
+  buffer uninitialised and hashing it wholesale would make two peers holding identical cylinders
+  report a mismatch. `PhysxVehicleWheelAttachment` now chooses each wheel's collision geometry,
+  shape flags and collision group; wheels stay non-colliding cooked prisms by default, so
+  existing vehicles hash unchanged. A simulating wheel must be filtered off the drivable surface
+  — see [Vehicles and articulations](Documentation/VehiclesAndArticulations.md#wheel-collision-shapes).
+  A standalone convex core's `margin` *grows* the shape (true radius `radius + margin`), whereas a
+  wheel's `cylinderMargin` is *size-preserving* — it shrinks the core so the wheel keeps its
+  authored size. The two are documented as opposites everywhere they appear.
+  Soaked by `TestConvexCoreOnMeshIsReproducibleUnderRollback` (cylinders resting and rolling on a
+  triangle mesh: peers agree for 600 rolled-back ticks, and rewind-and-replay lands on the
+  un-rewound state bit for bit) and `TestVehicleCylinderWheelsAreDeterministic`.
+- **Vehicle wheel construction poses in the hash, and managed construction diagnostics.** A
+  cylinder wheel's shape has to be turned onto the wheel axis, and that rotation is construction,
+  not the runtime pose Vehicle2 rewrites every step — so `PxwWorldHashConstruction` now folds each
+  vehicle's non-identity wheel construction poses (`physxWheelShapeLocalPoses`, in axle order) into
+  the hash. Default cooked-prism vehicles leave these at identity and hash exactly as before;
+  cylinder vehicles on different frames no longer collide on geometry alone. `DeterministicWorld`
+  gains `ReadConstructionHashes` (per-entry) and `ReadConstructionHashPart(SimConstructionPart)`
+  for tracing an aggregate mismatch to a body and then to a facet — geometry, materials, filters,
+  or the new part 12, the wheel construction poses. The process-global group table is folded only
+  into the aggregate hash, never a per-entry part, so an aggregate-only mismatch points at it.
+  `DeterministicWorld.Dispose` now resets the group table (it outlives the world), and
+  `PhysxShape.CollisionGroup` logs an error and rejects a change once the native shape exists,
+  instead of silently diverging from the live shape and from what peers were told at admission.
+  Guarded by `TestVehicleConstructionHashIncludesWheelShapeLocalPoses`. Snapshot format and config
+  hash unchanged.
 - **Contact and trigger events, native.** Typed `PxwContactEvent` / `PxwTriggerEvent`, a
   per-world `PxSimulationEventCallback`, and a notification-only filter shader that requests
   touch and contact-point reports without changing which pairs collide or are solved. Drains
@@ -161,6 +201,29 @@ rebuild payloads include held canonical inputs plus pending future events.
   `Validate` requires `SnapshotHistory > LocalInputDelay + 1`.
 
 ### Fixed
+
+- **A session everybody started together could fork on a contested contact, while the same
+  workload agreed for anyone who joined mid-match.** Setup builds the scene in the order it runs
+  — every pool add, then a disable across the whole pool, then an enable for whatever the game mode
+  spawned — and a `PxScene` carries the shape of that history internally. Two peers running
+  identical setup code therefore reach identical *contents* by different routes, and nothing the
+  framework compares can see the difference: it is not construction, which hashes the blueprint
+  and matched exactly, and it is not state, which hashes poses and velocities that also matched.
+  The arrangement only decides anything when a contact configuration is close enough to a tie for
+  the solver's visiting order to pick the winner — two players pressing a ball between them from
+  opposite sides — at which point the peers resolve it differently and the physics channel forks on
+  one tick with every other channel still in agreement. A mid-match joiner was immune for an
+  incidental reason: `PrepareForRebuild` recreates the native world, which re-adds every entity to
+  a fresh scene in stable-ID order, the one arrangement each peer reaches independently of how it
+  got there. `SimGameHost.Begin` now recreates too, after `OnSessionStart` so it captures the final
+  enabled set and before `Initialise` so tick zero is taken from the recreated scene, which makes
+  the two join paths identical. Recreating at setup loses nothing, because nothing has moved yet.
+  Note that this changes simulation results, and the construction hash — which is what the join
+  handshake compares — does not change with it, so a peer on an older build will pass admission
+  and then desync; ship every peer together. The soccer sample's harness covers the case that
+  failed: `RunPreStartRepro` drives both players onto the ball from a pre-start join and asserts
+  the peers agree, and `TwinHostRepro` pins that two independently built worlds driven identically
+  never diverge on their own.
 
 - **No session had ever actually enabled `eENABLE_ENHANCED_DETERMINISM`, and every session had
   enabled CCD.** `SimSceneFlags` claimed to mirror `pxw::PxwSceneFlag` and did not: it declared

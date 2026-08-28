@@ -13,8 +13,25 @@ Common causes:
 - different prefabs, shapes, materials or mass setup;
 - different action registration order;
 - different `SimConfig` or `SimNetConfig`;
+- a different collision group table (see below);
 - transport peer ID does not equal the client player ID;
 - GPU backend selected for an authoritative session.
+
+### Collision group table mismatches
+
+The construction hash includes the pairs of collision groups that have been told not to
+collide, because that table decides whether two shapes touch at all and peers that disagree
+about it simulate differently while every actor, shape and geometry still hashes the same.
+
+The table is process-global rather than per-world: it lives in PhysX's extensions library, so
+it is shared by every world in the process and it survives leaving Play mode in the editor.
+Two things follow. Configure it from authored data during world construction, never from
+gameplay code that might run at a different time on a different machine. And call
+`PhysxCollisionGroups.ResetToDefault()` when tearing a session down, or the next session in
+the same process inherits this one's filtering and fails admission for no visible reason.
+
+Only disabled pairs contribute to the hash, so a session that never touches groups hashes as
+though the feature did not exist.
 
 ## Frequent retiming or rollback
 
@@ -73,6 +90,38 @@ Use the reported channel:
 - Game: broken game-mode capture/restore or action registration mismatch.
 
 Enable `PerEntityHashDiagnostics` while diagnosing a physics mismatch.
+
+## Only a session everybody started together desyncs
+
+A physics-channel fork on one tick, with the entity and game channels still in agreement, on a
+contact tight enough to be near a tie — several bodies pressing one body from opposite sides — and
+only for peers present before the session started. Anyone who joined mid-match, or left and
+rejoined, is fine.
+
+That pattern means the two `PxScene` objects hold the same bodies in a different internal
+arrangement, which is invisible to both hashes: construction covers the blueprint and state covers
+poses and velocities, and those all match. Recreating the native world normalises it by re-adding
+every entity in stable-ID order, which is why the joining path was immune — it recreates on every
+rebuild. `SimGameHost.Begin` now recreates during setup so both paths match, so if you see this
+while driving `RollbackEngine` or `DeterministicWorld` yourself, call
+`DeterministicWorld.RecreateNativeWorld` once after your world is fully built and before the first
+capture.
+
+Because construction is unchanged by this, the join handshake cannot detect a peer running an
+older build; it will be admitted and then desync. Update every peer together.
+
+## A vehicle rides high or steers badly
+
+Every peer agrees, so this is not a desync — it is the road being resolved twice. A wheel with
+`isSimulationShape` enabled and no collision group excluding the drivable surface is solved as a
+contact *and* by the suspension raycast and tire model. Give wheels their own group and disable it
+against the road's group, and prefer `Cylinder` over `Cooked Prism` so contacts do not chatter as
+the wheel spins. See
+[Vehicles and articulations](VehiclesAndArticulations.md#wheel-collision-shapes).
+
+A low dynamic object nudged by a wheel that is *not* a simulation shape is a different thing and
+not a bug: suspension raycasts hit any shape in their query filter, so the tire model can push
+something under the wheel without any contact being generated.
 
 ## Deterministic rules
 

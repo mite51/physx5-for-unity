@@ -46,6 +46,36 @@ namespace PhysX5ForUnity
         public Vector3 suspensionForceAppPoint = Vector3.zero;
         public Vector3 tireForceAppPoint = Vector3.zero;
 
+        [Header("Collision shape")]
+        [Tooltip("Where the wheel's collision shape gets its geometry. Cooked Prism is what the " +
+                 "vehicle SDK builds and what this package has always used. Cylinder is exact and " +
+                 "does not chatter as the wheel spins, which matters if the wheel simulates.")]
+        public PxwVehicleWheelGeometryMode geometryMode = PxwVehicleWheelGeometryMode.CookedPrism;
+
+        [Tooltip("Geometry to use when Geometry Mode is Geometry. Ignored otherwise.")]
+        public PhysxGeometry collisionGeometry;
+
+        [Tooltip("Convex core margin used by the Cylinder mode. Size-preserving, and so the " +
+                 "OPPOSITE of a standalone PhysxCylinderGeometry margin (which grows the shape): " +
+                 "here the core SHRINKS by this much so the wheel keeps the size the wheel asset " +
+                 "asks for. A small non-zero value rounds the rim and can steady contact.")]
+        public float cylinderMargin = 0.0f;
+
+        [Tooltip("Let the wheel collide. OFF by default and deliberately so: the suspension raycast " +
+                 "and tire model already resolve the wheel against the ground, so a simulating wheel " +
+                 "must be given a collision group that does not collide with the drivable surface, " +
+                 "or the road gets resolved twice and the handling model fights the contact solver.")]
+        public bool isSimulationShape = false;
+
+        [Tooltip("Let scene queries hit the wheel. Safe to enable on its own: it changes nothing " +
+                 "the solver does, it just stops wheels being invisible to raycasts and overlaps.")]
+        public bool isSceneQueryShape = false;
+
+        [Tooltip("Collision group (0-31) for the wheel's simulation filter data. Only meaningful " +
+                 "when the wheel is a simulation shape. Use PhysxCollisionGroups to stop this group " +
+                 "colliding with the group your drivable surface uses.")]
+        public int collisionGroup = PhysxCollisionGroups.DefaultGroup;
+
         /// <summary>Wheel id assigned by the owning vehicle at build time.</summary>
         public int WheelId { get; internal set; } = -1;
 
@@ -59,6 +89,49 @@ namespace PhysX5ForUnity
                 moi = 0.5f * 20.0f * 0.35f * 0.35f,
                 dampingRate = 0.25f
             };
+        }
+
+        /// <summary>
+        /// Builds the collision shape descriptor for this wheel. The defaults reproduce the
+        /// historical behaviour: a cooked prism that neither simulates nor answers queries.
+        /// </summary>
+        public PxwVehicleWheelShapeDesc GetWheelShapeDesc()
+        {
+            int group = collisionGroup;
+            if (!PhysxCollisionGroups.IsValidGroup(group))
+            {
+                Debug.LogError(
+                    $"PhysxVehicleWheelAttachment '{name}': collision group {group} is out of range; " +
+                    $"valid groups are 0..{PhysxCollisionGroups.MaxGroups - 1}. Using " +
+                    $"{PhysxCollisionGroups.DefaultGroup}.", this);
+                group = PhysxCollisionGroups.DefaultGroup;
+            }
+
+            return new PxwVehicleWheelShapeDesc
+            {
+                geometryMode = (int)geometryMode,
+                simulationShape = isSimulationShape ? 1 : 0,
+                sceneQueryShape = isSceneQueryShape ? 1 : 0,
+                margin = Mathf.Max(0.0f, cylinderMargin),
+                // The filter shader reads word0 as a collision group index; the rest feed its
+                // group-mask filtering, which is left in its pass-everything default.
+                simFilterData = new uint[] { (uint)group, 0, 0, 0 },
+                queryFilterData = new uint[] { (uint)group, 0, 0, 0 }
+            };
+        }
+
+        /// <summary>
+        /// Native geometry for <see cref="PxwVehicleWheelGeometryMode.Geometry"/>, or
+        /// <see cref="System.IntPtr.Zero"/> when this wheel does not use that mode.
+        /// </summary>
+        public System.IntPtr GetCollisionGeometryPtr()
+        {
+            if (geometryMode != PxwVehicleWheelGeometryMode.Geometry || collisionGeometry == null)
+            {
+                return System.IntPtr.Zero;
+            }
+            collisionGeometry.CreateOrGetSharedGeometry();
+            return collisionGeometry.NativeObjectPtr;
         }
 
         public PxwVehicleTireDesc GetTireDesc()

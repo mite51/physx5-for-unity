@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using PhysX5ForUnity;
 using UNDPWR.Diagnostics;
 using UNDPWR.Interop;
 
@@ -62,6 +63,7 @@ namespace UNDPWR.Core
         private byte[] _scratch = new byte[0];
         private SimPoseEntry[] _poseScratch = new SimPoseEntry[0];
         private SimEntryHash[] _hashScratch = new SimEntryHash[0];
+        private SimEntryHash[] _constructionScratch = new SimEntryHash[0];
 
         /// <summary>The configuration this world was created with.</summary>
         public SimConfig Config { get { return _config; } }
@@ -595,10 +597,11 @@ namespace UNDPWR.Core
         /// Hashes how every registered body was built, as opposed to what state it is in.
         /// </summary>
         /// <remarks>
-        /// Covers shape count and attachment order, each shape's geometry, local pose,
-        /// contact and rest offsets, flags, filter data and material coefficients, and each
-        /// body's mass properties, damping, velocity and depenetration clamps, solver
-        /// iteration counts and thresholds.
+        /// Covers shape count and attachment order, each shape's geometry, immutable local
+        /// pose, contact and rest offsets, flags, filter data and material coefficients, and
+        /// each body's mass properties, damping, velocity and depenetration clamps, solver
+        /// iteration counts and thresholds. Vehicle2 wheel-shape poses are excluded because
+        /// Vehicle2 rewrites them as runtime output after every step.
         /// <para>
         /// None of that appears in a snapshot, in <see cref="CaptureState"/>'s hash or in
         /// <see cref="HashPerEntry"/>, because none of it changes as the simulation runs --
@@ -620,11 +623,85 @@ namespace UNDPWR.Core
         /// bodies. The authoritative admission handshake rejects the aggregate mismatch before
         /// either endpoint enters the timeline.
         /// </para>
+        /// <para>
+        /// The aggregate also folds in the process-global collision group table
+        /// (<see cref="PhysxCollisionGroups"/>), which is not attached to any one entity. When
+        /// this hash disagrees but <see cref="ReadConstructionHashes"/> matches on every entry
+        /// between two peers, the group table is the remaining suspect: it is deliberately kept
+        /// out of the per-entry breakdown so an aggregate-only mismatch points straight at it.
+        /// </para>
         /// </remarks>
         public ulong HashConstruction()
         {
             ThrowIfDisposed();
             return NativeMethods.PxwWorldHashConstruction(_world);
+        }
+
+        /// <summary>
+        /// Per-entry construction hashes, to name which body two peers built differently.
+        /// </summary>
+        /// <remarks>
+        /// The per-entry equivalent of <see cref="HashConstruction"/>: each record carries a
+        /// stable ID and a hash of just that entity's construction. Comparing these against a
+        /// peer turns an aggregate mismatch into a named body. Note the process-global collision
+        /// group table is <i>not</i> included here (see <see cref="HashConstruction"/>), so two
+        /// peers whose only difference is the group table match on every entry while their
+        /// aggregate hashes differ.
+        /// </remarks>
+        /// <returns>
+        /// A buffer reused between calls, valid until the next call to this method. Copy anything
+        /// that needs to outlive it.
+        /// </returns>
+        public unsafe SimEntryHash[] ReadConstructionHashes(out int count)
+        {
+            ThrowIfDisposed();
+
+            int capacity = (int)NativeMethods.PxwWorldGetEntryCount(_world);
+            if (_constructionScratch.Length < capacity)
+            {
+                _constructionScratch = new SimEntryHash[capacity];
+            }
+
+            fixed (SimEntryHash* dst = _constructionScratch)
+            {
+                count = (int)NativeMethods.PxwWorldHashConstructionPerEntry(
+                    _world, dst, (uint)_constructionScratch.Length);
+            }
+            return _constructionScratch;
+        }
+
+        /// <summary>
+        /// One diagnostic slice of the per-entry construction hash, so a mismatch can be traced
+        /// to a specific facet -- geometry, materials, filter data, or vehicle wheel poses --
+        /// rather than just a body.
+        /// </summary>
+        /// <remarks>
+        /// When <see cref="ReadConstructionHashes"/> names a divergent body, walking the
+        /// <see cref="SimConstructionPart"/> values isolates <i>what</i> about it differs. Parts
+        /// 0/5/7 exclude the runtime vehicle wheel poses Vehicle2 rewrites every step;
+        /// <see cref="SimConstructionPart.VehicleWheelConstructionPoses"/> carries the wheels'
+        /// construction-time axis alignment instead.
+        /// </remarks>
+        /// <returns>
+        /// A buffer reused between calls, valid until the next call to this method. Copy anything
+        /// that needs to outlive it.
+        /// </returns>
+        public unsafe SimEntryHash[] ReadConstructionHashPart(SimConstructionPart part, out int count)
+        {
+            ThrowIfDisposed();
+
+            int capacity = (int)NativeMethods.PxwWorldGetEntryCount(_world);
+            if (_constructionScratch.Length < capacity)
+            {
+                _constructionScratch = new SimEntryHash[capacity];
+            }
+
+            fixed (SimEntryHash* dst = _constructionScratch)
+            {
+                count = (int)NativeMethods.PxwWorldHashConstructionPartPerEntry(
+                    _world, dst, (uint)_constructionScratch.Length, (uint)part);
+            }
+            return _constructionScratch;
         }
 
         /// <summary>
@@ -687,6 +764,13 @@ namespace UNDPWR.Core
             _world = IntPtr.Zero;
             _entities.Clear();
             _pendingCommit.Clear();
+
+            // The collision group table is process-global and outlives this world (see
+            // PhysxCollisionGroups), so a session's filtering would otherwise leak into whatever
+            // runs next -- most visibly across editor Play sessions. Reset it here, when the
+            // session ends, not during a native-world rebuild, which reuses the same table.
+            PhysxCollisionGroups.ResetToDefault();
+
             SimLog.Info("World destroyed");
         }
     }

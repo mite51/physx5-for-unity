@@ -68,6 +68,27 @@ namespace PhysX5ForUnity
         private void CreateExclusiveShape()
         {
             m_nativeObjectPtr = Physx.CreateShape(m_geometry.NativeObjectPtr, m_material.NativeObjectPtr, isExclusive);
+            ApplyFilterData();
+        }
+
+        /// <summary>
+        /// Pushes the authored collision group into the shape's simulation filter data, which the
+        /// default filter shader reads as a group index. See <see cref="PhysxCollisionGroups"/>.
+        /// </summary>
+        private void ApplyFilterData()
+        {
+            if (m_nativeObjectPtr == IntPtr.Zero) return;
+
+            if (!PhysxCollisionGroups.IsValidGroup(m_collisionGroup))
+            {
+                Debug.LogError(
+                    $"PhysxShape '{name}': collision group {m_collisionGroup} is out of range; " +
+                    $"valid groups are 0..{PhysxCollisionGroups.MaxGroups - 1}. Using " +
+                    $"{PhysxCollisionGroups.DefaultGroup}.", this);
+                m_collisionGroup = PhysxCollisionGroups.DefaultGroup;
+            }
+
+            Physx.SetShapeSimulationFilterData(m_nativeObjectPtr, (uint)m_collisionGroup, 0, 0, 0);
         }
 
         private void CreateShape()
@@ -109,7 +130,10 @@ namespace PhysX5ForUnity
 
         private string GenerateUniqueKey()
         {
-            return $"{m_geometry.NativeObjectPtr}_{m_material.GetEntityId()}"; // this is ugly but seems to work.
+            // The collision group is part of the key because it is per-shape state: two
+            // components sharing one native shape would otherwise each overwrite the other's
+            // group, and the last one to initialise would silently decide the filtering for both.
+            return $"{m_geometry.NativeObjectPtr}_{m_material.GetEntityId()}_{m_collisionGroup}"; // this is ugly but seems to work.
         }
 
         private static Dictionary<string, (IntPtr ptr, int refCount)> sm_sharedShapes = new Dictionary<string, (IntPtr ptr, int refCount)>();
@@ -126,5 +150,38 @@ namespace PhysX5ForUnity
         }
         [SerializeField]
         private bool isExclusive = true;
+
+        [SerializeField]
+        [Tooltip("Collision group index (0-31) written to the shape's simulation filter data. " +
+                 "Group 0 collides with everything unless the group table says otherwise; use " +
+                 "PhysxCollisionGroups to disable specific group pairs.")]
+        private int m_collisionGroup = PhysxCollisionGroups.DefaultGroup;
+
+        /// <summary>
+        /// Collision group index this shape reports to the filter shader. See
+        /// <see cref="PhysxCollisionGroups"/> for what the groups mean.
+        /// </summary>
+        public int CollisionGroup
+        {
+            get { return m_collisionGroup; }
+            // The group is written to the shape's simulation filter data once, in ApplyFilterData
+            // during CreateShape. There is no path that re-applies it, and quietly accepting a
+            // change here would leave the field disagreeing with the live shape -- and, because
+            // the group feeds the construction hash, with what peers were told at admission. So
+            // once the native shape exists this is rejected loudly rather than silently ignored.
+            set
+            {
+                if (value == m_collisionGroup) return;
+                if (m_nativeObjectPtr != IntPtr.Zero)
+                {
+                    Debug.LogError(
+                        $"PhysxShape '{name}': CollisionGroup cannot change from {m_collisionGroup} " +
+                        $"to {value} after the native shape has been created; set it before creation. " +
+                        "Ignoring.", this);
+                    return;
+                }
+                m_collisionGroup = value;
+            }
+        }
     }
 }

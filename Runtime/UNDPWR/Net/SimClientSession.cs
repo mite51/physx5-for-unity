@@ -51,6 +51,7 @@ namespace UNDPWR.Net
         public SimClientSessionState State { get; private set; }
         public RollbackEngine Engine { get { return _engine; } }
         public uint Epoch { get { return _epoch; } }
+        public string DisconnectReason { get; private set; }
 
         public SimNetStats Stats
         {
@@ -299,13 +300,40 @@ namespace UNDPWR.Net
             ulong simulationHash = reader.ReadUInt64();
             ulong networkHash = reader.ReadUInt64();
             ulong constructionHash = reader.ReadUInt64();
-            if (!accepted || simulationHash != _simulation.ComputeHash()
-                || networkHash != _network.ComputeHash()
-                || constructionHash != _engine.ConstructionHash)
+            ulong localSimulationHash = _simulation.ComputeHash();
+            ulong localNetworkHash = _network.ComputeHash();
+            ulong localConstructionHash = _engine.ConstructionHash;
+            if (!accepted || simulationHash != localSimulationHash
+                || networkHash != localNetworkHash
+                || constructionHash != localConstructionHash)
             {
+                if (simulationHash != localSimulationHash)
+                {
+                    DisconnectReason = string.Format(
+                        "simulation config hash differs (host 0x{0:X16}, client 0x{1:X16})",
+                        simulationHash, localSimulationHash);
+                }
+                else if (networkHash != localNetworkHash)
+                {
+                    DisconnectReason = string.Format(
+                        "network config hash differs (host 0x{0:X16}, client 0x{1:X16})",
+                        networkHash, localNetworkHash);
+                }
+                else if (constructionHash != localConstructionHash)
+                {
+                    DisconnectReason = string.Format(
+                        "PhysX construction hash differs (host 0x{0:X16}, client 0x{1:X16})",
+                        constructionHash, localConstructionHash);
+                }
+                else
+                {
+                    DisconnectReason =
+                        "the server rejected this client identity or player roster";
+                }
                 SetState(SimClientSessionState.Disconnected);
                 return;
             }
+            DisconnectReason = null;
             _epoch = epoch;
             _serverTick = serverTick;
             _serverTickSampledAt = nowMicroseconds;

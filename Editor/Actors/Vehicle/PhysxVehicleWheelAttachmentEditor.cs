@@ -10,7 +10,38 @@ namespace PhysX5ForUnity
         {
             serializedObject.Update();
             DrawPropertiesExcluding(serializedObject, "m_Script");
+            DrawWheelCollisionHelp();
             serializedObject.ApplyModifiedProperties();
+        }
+
+        /// <summary>
+        /// Explains the consequences of making a wheel collide, in the inspector where the
+        /// decision is made rather than only in the console once the scene runs.
+        /// </summary>
+        private void DrawWheelCollisionHelp()
+        {
+            PhysxVehicleWheelAttachment attach = target as PhysxVehicleWheelAttachment;
+            if (attach == null || !attach.isSimulationShape) return;
+
+            if (attach.collisionGroup == PhysxCollisionGroups.DefaultGroup)
+            {
+                EditorGUILayout.HelpBox(
+                    "This wheel simulates but sits in the default collision group, so it will " +
+                    "collide with the road on top of the suspension raycast and tire model that " +
+                    "already handle the road. The vehicle will ride high and steer badly. Give " +
+                    "wheels their own group and disable that group against the road's group with " +
+                    "PhysxCollisionGroups.SetPairCollides during world setup.",
+                    MessageType.Warning);
+            }
+
+            if (attach.geometryMode == PxwVehicleWheelGeometryMode.CookedPrism)
+            {
+                EditorGUILayout.HelpBox(
+                    "The cooked prism's facets turn with the wheel, so contacts chatter as it " +
+                    "spins. Switch Geometry Mode to Cylinder for a shape that is the same from " +
+                    "every angle.",
+                    MessageType.Info);
+            }
         }
 
         private void OnSceneGUI()

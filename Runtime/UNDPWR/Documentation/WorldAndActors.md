@@ -63,6 +63,17 @@ registration.
 `Advance`) commits at the tick boundary. Committing mid-replay would give an actor a different
 history than the peers that committed it at the boundary — never do it.
 
+Sorting the commit is necessary but not sufficient, because a scene also carries the shape of
+everything else done to it — every later commit, enable and disable. Two peers whose setup differs
+only in the *route* it took to the same contents can end up arranged differently, and neither hash
+can see it: construction covers the blueprint and state covers poses and velocities, and both
+match. It stays harmless until a contact is close enough to a tie for the solver's visiting order
+to decide it, and then the peers pick differently. So finish setup with one
+`DeterministicWorld.RecreateNativeWorld`, which re-adds everything to a fresh scene in stable-ID
+order — the one arrangement every peer reaches independently. Nothing has moved yet, so it costs
+nothing. `SimGameHost.Begin` already does this for you; do it yourself only when you build a world
+without the game host.
+
 ## Registering Unity PhysX actors
 
 The core `DeterministicWorld.Register` takes a raw native handle so the core does not depend on
@@ -125,6 +136,28 @@ Compute once and **replicate anyway** — do not rely on every peer recomputing 
 at join rather than twenty seconds into a match. A near-spherical compound just above the
 default tolerance can be given a wider tolerance for that one body rather than widening the
 global default.
+
+## Collision geometry and filtering
+
+Every shape's geometry participates in the construction hash, so peers that author a collider
+differently are caught at join. That includes the convex core geometries
+(`PhysxCylinderGeometry`, `PhysxConeGeometry`, `PhysxEllipsoidGeometry`), whose core type,
+dimensions and margin are all hashed.
+
+Collision filtering is hashed too, but it needs more care than a per-shape property, because the
+group table that decides which pairs collide is **process-global** — it lives in PhysX's
+extensions library, not in a world. Configure it from authored data during construction, and
+call `PhysxCollisionGroups.ResetToDefault()` at teardown so it does not leak into the next
+session in the same process. Only the disabled pairs are hashed, so a session that never touches
+groups is unaffected by any of this. See
+[Troubleshooting](Troubleshooting.md#collision-group-table-mismatches).
+
+The one place filtering is not optional is vehicle wheels. Wheels are raycast driven: the
+suspension query and tire model already resolve the wheel against the road. Turning a wheel into
+a simulation shape without excluding the drivable surface makes the road get resolved twice, and
+the vehicle rides high and steers badly. Give wheels their own group, disable it against the
+road's group, and prefer `Cylinder` over `Cooked Prism` for the wheel geometry so contacts do
+not chatter as the wheel spins.
 
 ## Enabling and disabling instead of unregistering
 

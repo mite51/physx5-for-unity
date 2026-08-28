@@ -225,6 +225,39 @@ namespace PhysX5ForUnity
         Custom,
     }
 
+    /// <summary>
+    /// Pre-authored GJK support cores for convex core geometry, mirroring
+    /// <c>physx::PxConvexCore::Type</c>. A convex core shape is the core swept by a margin,
+    /// so a cylinder with a non-zero margin has rounded edges.
+    /// </summary>
+    /// <remarks>
+    /// Point and Segment cores are equivalent to a sphere and a capsule respectively, and Box
+    /// duplicates <see cref="PhysxBoxGeometry"/>. Those primitives have dedicated, faster
+    /// narrowphase paths, so the authoring components only cover Cylinder, Cone and Ellipsoid.
+    /// The values are still listed because the native factory accepts every core.
+    /// <para>
+    /// <b>"Margin" means two opposite things depending on who is authoring the shape, and the
+    /// difference is deliberate.</b> At the native/geometry layer -- <see cref="PhysxConvexCoreGeometry"/>
+    /// and this enum -- the margin is <i>additive</i>: the shape is the core <i>grown</i> by the
+    /// margin, so a cylinder's true radius is <c>coreRadius + margin</c> and its true length is
+    /// <c>coreHeight + 2 * margin</c>. A vehicle wheel authored through
+    /// <c>PhysxVehicleWheelAttachment.cylinderMargin</c> is the exception: there the margin is
+    /// <i>size-preserving</i>, because the wheel has an authored radius and width it must keep, so
+    /// the core is <i>shrunk</i> by the margin before it is grown back out, leaving the outer
+    /// dimensions equal to the wheel asset. Both round the edges; only the standalone geometry
+    /// path changes the overall size.
+    /// </para>
+    /// </remarks>
+    public enum PxConvexCoreType
+    {
+        Point,
+        Segment,
+        Box,
+        Ellipsoid,
+        Cylinder,
+        Cone,
+    }
+
     public enum PxSdfBitsPerSubgridPixel
     {
         Bit8PerPixel = 1,   //!< 8 bit per subgrid pixel (values will be stored as normalized integers)

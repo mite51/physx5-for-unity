@@ -128,6 +128,22 @@ namespace UNDPWR.Gameplay
 
             _gameMode.OnSessionStart(_context);
 
+            // Setup leaves the scene holding an arrangement shaped by the order it was built in --
+            // every add, then a disable for all of the pool, then an enable for whatever the game
+            // mode spawned. Two peers that ran identical setup code can still end up with
+            // different internal arrangements, and nothing the framework compares would notice:
+            // it is in neither the construction hash nor a snapshot. It stays harmless until a
+            // contact configuration is close enough to a tie for the arrangement to pick the
+            // winner, and then the peers resolve it differently and fork.
+            //
+            // Recreating here re-adds every entity to a fresh scene in stable-ID order, which is
+            // the one arrangement every peer reaches independently. A joining peer already gets
+            // this via PrepareForRebuild, which is why a mid-match join agreed while a session
+            // that everybody started together did not; doing it at Begin makes the two paths
+            // identical. It runs before Initialise so tick zero is captured from the recreated
+            // scene, and after OnSessionStart so the enabled set it restores is the final one.
+            _context.World.RecreateNativeWorld();
+
             _engine.SetStateProvider(this);
             _engine.AddHandler(this);
             _engine.AddEventHandler(this);

@@ -98,6 +98,82 @@ timer, autobox and clutch for engine-drive) is captured in the physics channel; 
 output is recomputed. So the managed `CaptureState`/`RestoreState` only needs whatever gameplay
 state the car adds, such as a boost charge.
 
+## Wheel collision shapes
+
+A wheel's collision shape is off by default, and that is a real default rather than an oversight.
+PhysX's vehicle SDK gives each wheel a cooked 16-sided convex prism with no shape flags set, so it
+collides with nothing and is invisible to scene queries; the suspension raycast and the tire model
+are what resolve the wheel against the road. A car works fine like this, and one left alone hashes
+exactly as it did before any of this was configurable.
+
+You need to change it when something other than the road has to notice the wheels — a kerb, a
+bollard, debris the tire should knock aside — or when a gameplay raycast needs to hit a wheel.
+`PhysxVehicleWheelAttachment` carries the per-wheel choices:
+
+| Field | What it does |
+| --- | --- |
+| `geometryMode` | `CookedPrism` (the SDK's hull, the default), `Cylinder` (a true cylinder sized from the wheel asset), or `Geometry` (uses `collisionGeometry` as-is) |
+| `cylinderMargin` | Convex core margin for `Cylinder`, and *size-preserving* — the opposite of a standalone `PhysxCylinderGeometry` margin, which grows the shape. The core shrinks by this much so the wheel keeps the asset's size; a small non-zero value rounds the rim and can steady contact |
+| `isSceneQueryShape` | Lets queries hit the wheel. Safe on its own — it changes nothing the solver does |
+| `isSimulationShape` | Lets the wheel collide. **Not safe on its own**; see below |
+| `collisionGroup` | Group index for the wheel's filter data, for use with `PhysxCollisionGroups` |
+
+### A simulating wheel must be filtered off the road
+
+Turning on `isSimulationShape` without excluding the drivable surface makes the road get resolved
+twice: once by the suspension query and tire model, once by the contact solver. The car rides high
+and steers badly. So give wheels their own group and disable it against the road's group, during
+world construction:
+
+```csharp
+const int RoadGroup  = 1;
+const int WheelGroup = 2;
+
+PhysxCollisionGroups.SetPairCollides(WheelGroup, RoadGroup, false);
+```
+
+Then put the drivable surface's shapes in `RoadGroup` and set each attachment's `collisionGroup`
+to `WheelGroup`. Leave the chassis and everything else in `PhysxCollisionGroups.DefaultGroup`,
+which collides with everything, so wheels still hit obstacles and the chassis still hits the road.
+Call `PhysxCollisionGroups.ResetToDefault()` at teardown — the table is process-global and
+outlives the world. The group table folds into the construction hash, so a peer that configures it
+differently is caught at join rather than desyncing later; see
+[World and actors](WorldAndActors.md#collision-geometry-and-filtering).
+
+Prefer `Cylinder` over `CookedPrism` once a wheel simulates. The vehicle writes the wheel's spin
+angle into the shape's local pose every step, so a prism's facets rotate with the wheel and contact
+points snap from facet to facet as it turns. A cylinder is rotationally invariant and does not.
+
+### It does not change how the car drives
+
+Swapping the collision geometry does not touch the handling model. The tire model is driven by the
+road geometry query, and that query never looks at the wheel's collision shape: the default
+raycast mode casts along the suspension travel direction, and even sweep mode sweeps PhysX's own
+unit cylinder mesh scaled by the wheel's radius and half width. Measured in the vehicle sample,
+prism and cylinder wheels produced bit-identical confirmed-hash streams over a thousand ticks and
+identical chassis ride heights, so `Cylinder` is a safe change to make to an already-tuned car.
+
+The one caveat is that suspension raycasts hit *any* shape in their query filter, dynamic obstacles
+included, so a low object under a wheel can be nudged by the tire model even with wheel collision
+switched off entirely. That is the road query doing its job, not a leak from the collision shape.
+
+### Determinism
+
+Convex core narrowphase is a different code path from the cooked hull it replaces, so it was
+soaked before wheels were allowed to depend on it. `TestConvexCoreOnMeshIsReproducibleUnderRollback`
+runs cylinders resting and rolling on an uneven triangle mesh — mesh contact is resolved per
+triangle, a rolling cylinder re-derives its contact set constantly, and a cylinder's contact patch
+is a line rather than a point or a facet. Over 600 rolled-back ticks two peers agree tick for tick,
+and a run that rewinds every eight ticks and resimulates the window lands on the state a run that
+never rewound reached, bit for bit, for cylinders and for boxes alike — the box is carried
+alongside so that a shortfall could be read as the solver rather than the geometry.
+`TestVehicleCylinderWheelsAreDeterministic` then drives two vehicles on simulating, filtered
+cylinder wheels for 200 rollback ticks and requires them to stay bit-identical.
+
+Both pass under PGS and TGS, and the vehicle test under both drive models. As everywhere else in
+the suite, bit-exact replay is asserted under PGS, the solver the framework requires, and
+characterised rather than asserted under TGS — where it currently comes out bit-exact as well.
+
 ## Setup rules (same as any actor)
 
 Both apply the two lifecycle rules from [World and actors](WorldAndActors.md): create the actor

@@ -64,8 +64,13 @@ namespace PhysX5ForUnity
         public float mass;
         public Vector3 moi;
         public PxTransformData cmassLocalPose;
+        /// <summary>Half extents of the fallback box, used only when no chassis geometry is supplied.</summary>
         public Vector3 boxHalfExtents;
-        public PxTransformData boxLocalPose;
+        /// <summary>
+        /// Local pose of the chassis collision shape. Applies to the supplied chassis geometry
+        /// as well as to the fallback box, which is why it is not named after the box.
+        /// </summary>
+        public PxTransformData shapeLocalPose;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -76,6 +81,41 @@ namespace PhysX5ForUnity
         public float mass;
         public float moi;
         public float dampingRate;
+    }
+
+    /// <summary>How a vehicle wheel's collision shape gets its geometry.</summary>
+    public enum PxwVehicleWheelGeometryMode
+    {
+        /// <summary>
+        /// The cooked 16-sided convex prism PhysX's vehicle SDK builds from the wheel's radius
+        /// and half width. The historical behaviour, and the default.
+        /// </summary>
+        CookedPrism = 0,
+
+        /// <summary>
+        /// A true cylinder, sized from the wheel's radius and half width. The prism's facets
+        /// rotate with the wheel, because the vehicle writes the spin angle into the shape's
+        /// local pose every step, so contact points snap from facet to facet as it turns. A
+        /// cylinder is rotationally invariant and does not, which matters once the wheel is a
+        /// simulation shape.
+        /// </summary>
+        Cylinder = 1,
+
+        /// <summary>A geometry supplied by the caller, used as-is.</summary>
+        Geometry = 2,
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PxwVehicleWheelShapeDesc
+    {
+        public int geometryMode;
+        public int simulationShape;
+        public int sceneQueryShape;
+        public float margin;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public uint[] simFilterData;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public uint[] queryFilterData;
     }
 
     [StructLayout(LayoutKind.Sequential)]

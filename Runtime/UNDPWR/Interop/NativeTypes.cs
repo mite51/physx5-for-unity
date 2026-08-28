@@ -347,6 +347,64 @@ namespace UNDPWR.Interop
     }
 
     /// <summary>
+    /// The diagnostic construction sub-hash selected by
+    /// <see cref="UNDPWR.Core.DeterministicWorld.ReadConstructionHashPart"/>. Splitting the
+    /// construction hash into named parts turns "these two worlds are built differently" into
+    /// "they disagree on shape geometry", which is what a desync investigation actually needs.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors the <c>part</c> argument of <c>PxwWorldHashConstructionPartPerEntry</c>. The
+    /// process-global collision group table is folded only into the aggregate
+    /// <see cref="UNDPWR.Core.DeterministicWorld.HashConstruction"/>, never into a per-entry
+    /// part: if the aggregate hashes differ while every per-entry part matches on both peers,
+    /// the group table is the remaining suspect.
+    /// </remarks>
+    public enum SimConstructionPart : uint
+    {
+        /// <summary>Actor flags plus every shape's full construction (geometry and metadata).</summary>
+        ActorAndShapes = 0,
+
+        /// <summary>Rigid-body mass, inertia, centre of mass, damping and velocity limits.</summary>
+        RigidBody = 1,
+
+        /// <summary>Dynamic solver iteration counts and sleep/stabilisation thresholds.</summary>
+        DynamicSolver = 2,
+
+        /// <summary>Actor flags and shape count only.</summary>
+        ActorFlagsAndCount = 3,
+
+        /// <summary>Per-shape geometry type and dimensions.</summary>
+        Geometry = 4,
+
+        /// <summary>Per-shape metadata: local pose, offsets, flags and filter data.</summary>
+        ShapeMetadata = 5,
+
+        /// <summary>Per-shape materials.</summary>
+        Materials = 6,
+
+        /// <summary>Per-shape local pose. Excludes runtime vehicle wheel poses.</summary>
+        LocalPoses = 7,
+
+        /// <summary>Per-shape contact and rest offsets.</summary>
+        Offsets = 8,
+
+        /// <summary>Per-shape flags.</summary>
+        ShapeFlags = 9,
+
+        /// <summary>Per-shape simulation filter data.</summary>
+        SimulationFilter = 10,
+
+        /// <summary>Per-shape query filter data.</summary>
+        QueryFilter = 11,
+
+        /// <summary>
+        /// Vehicle wheel-shape construction poses: the cylinder axis alignment folded into the
+        /// aggregate hash but excluded from the runtime wheel poses. Empty for non-vehicles.
+        /// </summary>
+        VehicleWheelConstructionPoses = 12,
+    }
+
+    /// <summary>
     /// A per-entry checksum, used to pinpoint which body diverged.
     /// Mirrors <c>pxw::PxwEntryHash</c>.
     /// </summary>

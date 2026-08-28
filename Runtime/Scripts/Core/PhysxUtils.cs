@@ -75,6 +75,19 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr CreatePxGeometry(PxGeometryType type, int numShapeParams, ref float shapeParams, IntPtr shapeRef);
 
+        /// <summary>
+        /// Create a convex core geometry: the given core swept by <paramref name="margin"/>.
+        /// Released with <see cref="DeletePxGeometry"/> like any other geometry.
+        /// </summary>
+        /// <remarks>
+        /// Cylinder, cone and segment cores run along local +X, matching the capsule
+        /// convention, so orientation comes from the shape's local pose rather than the
+        /// geometry. <paramref name="numCoreParams"/> must match the core: point 0,
+        /// segment 1, box 3, ellipsoid 3, cylinder 2, cone 2.
+        /// </remarks>
+        [DllImport(PHYSX_DLL)]
+        public static extern IntPtr CreateConvexCoreGeometry(PxConvexCoreType coreType, int numCoreParams, ref float coreParams, float margin);
+
         [DllImport(PHYSX_DLL)]
         public static extern void DeletePxGeometry(IntPtr geometry);
 
