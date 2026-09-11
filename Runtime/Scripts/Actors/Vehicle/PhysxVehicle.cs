@@ -28,8 +28,8 @@ namespace PhysX5ForUnity
         public PxVehicleDifferentialType differentialType = PxVehicleDifferentialType.eMULTIWHEEL;
 
         [Tooltip("Bypass the differential/steer/brake command path and drive each wheel directly " +
-                 "(Omniverse PhysxVehicleWheelControllerAPI). Automatically enabled when a " +
-                 "PhysxVehicleWheelController is present on any wheel.")]
+                 "(Omniverse PhysxVehicleWheelControllerAPI). This is an explicit low-level opt-in: " +
+                 "it is never toggled on automatically.")]
         public bool useDirectWheelControl = false;
 
         [Header("Chassis")]
@@ -129,8 +129,12 @@ namespace PhysX5ForUnity
                 return;
             }
 
-            if (!useDirectWheelControl && GetComponentInChildren<PhysxVehicleWheelController>(true) != null)
-                useDirectWheelControl = true;
+            if (!ValidateConfiguration())
+            {
+                Debug.LogError($"PhysxVehicle '{name}': configuration is invalid; refusing to build. " +
+                    "Assign the explicit part assets the setup requires (see logged errors above).");
+                return;
+            }
 
             IntPtr materialPtr = ResolveMaterial(chassisMaterial);
 
@@ -241,6 +245,107 @@ namespace PhysX5ForUnity
             PxwVehicleDriveState state = default;
             if (m_finalized) Physx.GetVehicleDriveState(m_nativeObjectPtr, out state);
             return state;
+        }
+
+        /// <summary>
+        /// Diagnostic per-wheel telemetry (jounce/load, slip, friction, tire forces, wheel speed)
+        /// for parity traces. Returns null until the vehicle is finalized.
+        /// </summary>
+        public PxwVehicleWheelTelemetry[] GetWheelTelemetry()
+        {
+            if (!m_finalized) return null;
+            var dest = new PxwVehicleWheelTelemetry[m_wheels.Count];
+            Physx.GetVehicleWheelTelemetry(m_nativeObjectPtr, dest, dest.Length);
+            return dest;
+        }
+
+        /// <summary>
+        /// Diagnostic chassis telemetry (linear/angular velocity, yaw rate) for parity traces.
+        /// </summary>
+        public PxwVehicleBodyTelemetry GetBodyTelemetry()
+        {
+            PxwVehicleBodyTelemetry dest = default;
+            if (m_finalized) Physx.GetVehicleBodyTelemetry(m_nativeObjectPtr, out dest);
+            return dest;
+        }
+
+        // --- Validation ---
+
+        /// <summary>
+        /// Enforces the single canonical contract before anything is built. Every wheel must carry
+        /// explicit part assets, the engine drive path must have its full drivetrain, and a driven
+        /// differential must actually have driven wheels in a well-formed axle layout. There are no
+        /// silent fallbacks: an under-specified vehicle is a configuration error, not a default.
+        /// </summary>
+        private bool ValidateConfiguration()
+        {
+            bool ok = true;
+
+            foreach (PhysxVehicleWheelAttachment w in m_wheels)
+                ok &= w.Validate(name);
+
+            if (driveType == VehicleDriveType.Engine && !useDirectWheelControl)
+            {
+                if (engine == null) { Debug.LogError($"PhysxVehicle '{name}': engine-drive requires an engine asset.", this); ok = false; }
+                if (gearbox == null) { Debug.LogError($"PhysxVehicle '{name}': engine-drive requires a gearbox asset.", this); ok = false; }
+                if (autobox == null) { Debug.LogError($"PhysxVehicle '{name}': engine-drive requires an autobox asset.", this); ok = false; }
+                if (clutch == null) { Debug.LogError($"PhysxVehicle '{name}': engine-drive requires a clutch asset.", this); ok = false; }
+
+                ok &= ValidateDrivenAxles();
+            }
+            else if (driveType == VehicleDriveType.Direct && !useDirectWheelControl)
+            {
+                ok &= ValidateDrivenAxles();
+            }
+
+            return ok;
+        }
+
+        /// <summary>
+        /// Verifies the differential has driven wheels and, for the canonical four-wheel RWD kart,
+        /// that the axle layout is exactly two axles of two wheels with only the rear axle driven.
+        /// </summary>
+        private bool ValidateDrivenAxles()
+        {
+            int nbDriven = 0;
+            foreach (PhysxVehicleWheelAttachment w in m_wheels)
+                if (w.isDriven) nbDriven++;
+
+            if (nbDriven == 0)
+            {
+                Debug.LogError($"PhysxVehicle '{name}': the differential has no driven wheels. Mark at least " +
+                    "one wheel as driven; the setup does not silently drive all wheels.", this);
+                return false;
+            }
+
+            // Axle grouping (wheels are pre-sorted by axle then indexInAxle).
+            var perAxle = new List<int>();
+            int currentAxle = int.MinValue, countInAxle = 0;
+            foreach (PhysxVehicleWheelAttachment w in m_wheels)
+            {
+                if (w.axle != currentAxle)
+                {
+                    if (countInAxle > 0) perAxle.Add(countInAxle);
+                    currentAxle = w.axle;
+                    countInAxle = 0;
+                }
+                countInAxle++;
+            }
+            if (countInAxle > 0) perAxle.Add(countInAxle);
+
+            // The canonical kart is a four-wheel, two-axle vehicle. Enforce its ordering so the
+            // RWD 0,0,.5,.5 torque split and readback map to the wheels the designer expects.
+            if (m_wheels.Count == 4 && differentialType != PxVehicleDifferentialType.eTANK)
+            {
+                if (perAxle.Count != 2 || perAxle[0] != 2 || perAxle[1] != 2)
+                {
+                    Debug.LogError($"PhysxVehicle '{name}': a four-wheel vehicle must be two axles of two " +
+                        "wheels (front axle 0, rear axle 1). Fix the wheels' axle/indexInAxle fields.", this);
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         // --- Build helpers ---
@@ -385,8 +490,9 @@ namespace PhysX5ForUnity
             Physx.SetVehicleAxleDescription(m_nativeObjectPtr, nbWheelsPerAxle.Count,
                 nbWheelsPerAxle.ToArray(), wheelIdsInAxleOrder.ToArray());
 
+            // Gravity magnitude drives the nominal->maximum-compression derivation. It comes from the
+            // scene, which owns one gravity for every vehicle it contains.
             float gravMag = (Scene != null) ? Mathf.Max(0.01f, Scene.Gravity.magnitude) : 9.81f;
-            float sprungMassFallback = mass / m_wheels.Count;
 
             foreach (PhysxVehicleWheelAttachment w in m_wheels)
             {
@@ -399,19 +505,15 @@ namespace PhysX5ForUnity
                 WarnIfWheelCollisionIsUnfiltered(w);
                 Physx.SetVehicleWheelShapeParams(m_nativeObjectPtr, id, ref shapeDesc, w.GetCollisionGeometryPtr());
 
-                PxwVehicleSuspensionDesc suspDesc = w.GetSuspensionDesc(transform, sprungMassFallback);
-                if (suspDesc.sprungMass <= 0.0f) suspDesc.sprungMass = sprungMassFallback;
-                if (suspDesc.stiffness <= 0.0f)
-                    suspDesc.stiffness = suspDesc.sprungMass * gravMag / Mathf.Max(0.01f, suspDesc.travelDist) * 2.0f;
-                if (suspDesc.damping <= 0.0f)
-                    suspDesc.damping = Mathf.Sqrt(suspDesc.stiffness * suspDesc.sprungMass);
+                // Actor-local nominal ride-height transform in; maximum-compression attachment out.
+                // All spring values are authored explicitly (validated), so nothing is synthesised here.
+                PxwVehicleSuspensionDesc suspDesc = w.GetSuspensionDesc(transform, gravMag);
                 Physx.SetVehicleSuspensionParams(m_nativeObjectPtr, id, ref suspDesc);
 
                 PxwVehicleSuspensionComplianceDesc compDesc = w.GetComplianceDesc();
                 Physx.SetVehicleSuspensionCompliance(m_nativeObjectPtr, id, ref compDesc);
 
                 PxwVehicleTireDesc tireDesc = w.GetTireDesc();
-                if (tireDesc.restLoad <= 0.0f) tireDesc.restLoad = suspDesc.sprungMass * gravMag;
                 Physx.SetVehicleTireParams(m_nativeObjectPtr, id, ref tireDesc);
             }
         }
@@ -486,24 +588,17 @@ namespace PhysX5ForUnity
             PxwVehicleDifferentialDesc diff = BuildDifferentialDesc();
             Physx.SetVehicleDifferentialParams(m_nativeObjectPtr, ref diff);
 
-            PxwVehicleEngineDesc engineDesc = (engine != null)
-                ? engine.ToDesc()
-                : ScriptableObject.CreateInstance<PhysxVehicleEngine>().ToDesc();
+            // Every drivetrain asset is required and validated up front, so these are unconditional.
+            PxwVehicleEngineDesc engineDesc = engine.ToDesc();
             Physx.SetVehicleEngineParams(m_nativeObjectPtr, ref engineDesc);
 
-            PxwVehicleGearboxDesc gearboxDesc = (gearbox != null)
-                ? gearbox.ToDesc()
-                : ScriptableObject.CreateInstance<PhysxVehicleGearbox>().ToDesc();
+            PxwVehicleGearboxDesc gearboxDesc = gearbox.ToDesc();
             Physx.SetVehicleGearboxParams(m_nativeObjectPtr, ref gearboxDesc);
 
-            PxwVehicleAutoboxDesc autoboxDesc = (autobox != null)
-                ? autobox.ToDesc()
-                : ScriptableObject.CreateInstance<PhysxVehicleAutobox>().ToDesc();
+            PxwVehicleAutoboxDesc autoboxDesc = autobox.ToDesc();
             Physx.SetVehicleAutoboxParams(m_nativeObjectPtr, ref autoboxDesc);
 
-            PxwVehicleClutchDesc clutchDesc = (clutch != null)
-                ? clutch.ToDesc()
-                : ScriptableObject.CreateInstance<PhysxVehicleClutch>().ToDesc();
+            PxwVehicleClutchDesc clutchDesc = clutch.ToDesc();
             Physx.SetVehicleClutchParams(m_nativeObjectPtr, ref clutchDesc);
         }
 
@@ -523,11 +618,11 @@ namespace PhysX5ForUnity
                 wheelIdsInTrackOrder = new int[PxVehicleLimits.MaxNbWheels]
             };
 
+            // Driven-wheel membership is authored, not inferred. ValidateConfiguration has already
+            // guaranteed at least one driven wheel, so there is no "no driven wheels means all" path.
             List<int> driven = new List<int>();
             for (int i = 0; i < n; ++i)
                 if (m_wheels[i].isDriven) driven.Add(m_wheels[i].WheelId);
-            if (driven.Count == 0)
-                for (int i = 0; i < n; ++i) driven.Add(m_wheels[i].WheelId);
 
             float share = 1.0f / driven.Count;
             foreach (int id in driven)

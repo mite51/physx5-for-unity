@@ -22,7 +22,8 @@ namespace PhysX5ForUnity
         [Tooltip("Camber stiffness (N per radian of camber).")]
         public float camberStiffness = 0.0f;
 
-        [Tooltip("Tire load (N) at which the tire behaves nominally. If <= 0 it is derived from the sprung mass at Finalize time.")]
+        [Tooltip("Tire load (N) at which the tire behaves nominally. Authored explicitly; must be > 0. " +
+                 "Nothing is synthesised from the sprung mass.")]
         public float restLoad = 0.0f;
 
         [Tooltip("Friction multiplier as a function of longitudinal slip. Sampled into three points (low/peak/high slip).")]

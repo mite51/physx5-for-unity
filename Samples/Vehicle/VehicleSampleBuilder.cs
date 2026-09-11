@@ -3,22 +3,20 @@ using UnityEngine;
 namespace PhysX5ForUnity.Samples
 {
     /// <summary>
-    /// Programmatically builds a drivable four-wheel PhysX vehicle plus a ground
-    /// plane at play time. Used by the Vehicle sample scenes so the demo does not
-    /// depend on fragile hand-authored component wiring. Reusable part data is
-    /// created as in-memory ScriptableObjects, mirroring how a project would
-    /// normally reference PhysxVehicleWheel / Tire / Suspension / Engine assets.
+    /// Programmatically builds the one canonical PhysX Vehicle2 example: a four-wheel
+    /// <b>Standard Engine Drive</b> car with a rear-wheel-drive differential, front-axle
+    /// steering (Ackermann off), explicit reusable part assets, filtered cylinder wheels, and a
+    /// ground plane. This is deliberately a single, specific setup rather than a configurable
+    /// Direct/Engine matrix: Direct and Tank drive remain supported low-level APIs on
+    /// <see cref="PhysxVehicle"/> and in the native tests, but the sample shows the canonical path.
+    ///
+    /// Reusable part data is created as in-memory ScriptableObjects with every spring/tire value
+    /// authored explicitly, mirroring how a project references shared PhysxVehicleWheel / Tire /
+    /// Suspension / Engine / Gearbox / Autobox / Clutch assets. Nothing is synthesised.
     /// </summary>
     [AddComponentMenu("PhysX 5/Vehicle/Samples/Vehicle Sample Builder")]
     public class VehicleSampleBuilder : MonoBehaviour
     {
-        [Header("Drive model")]
-        public PhysxVehicle.VehicleDriveType driveType = PhysxVehicle.VehicleDriveType.Engine;
-        public PxVehicleDifferentialType differentialType = PxVehicleDifferentialType.eMULTIWHEEL;
-
-        [Tooltip("Drive each wheel directly (adds a PhysxVehicleWheelController per wheel) instead of using the controller/differential path.")]
-        public bool useDirectWheelControl = false;
-
         [Header("Layout")]
         public Vector3 chassisHalfExtents = new Vector3(0.9f, 0.4f, 2.2f);
         public float wheelRadius = 0.35f;
@@ -29,6 +27,24 @@ namespace PhysX5ForUnity.Samples
         public float chassisMass = 1500.0f;
         public Vector3 spawnPosition = new Vector3(0.0f, 1.0f, 0.0f);
 
+        [Header("Suspension (explicit)")]
+        public float suspensionTravel = 0.25f;
+        [Tooltip("Target resting suspension compression (m); the spring stiffness is authored to hit it under gravity.")]
+        public float restJounce = 0.1f;
+        [Tooltip("Spring damping ratio used to author the explicit damping value from stiffness and sprung mass.")]
+        public float dampingRatio = 0.35f;
+
+        [Header("Brakes / steering")]
+        public float maxBrakeTorque = 3000.0f;
+        public float maxHandbrakeTorque = 3000.0f;
+        public float maxSteerAngle = 30.0f;
+
+        [Header("Collision groups")]
+        [Tooltip("Group for the drivable surface. Wheels are filtered off this group so the road is not resolved twice.")]
+        public int roadGroup = 1;
+        [Tooltip("Group for the simulating cylinder wheels. Kept off the road group but free to hit walls and obstacles.")]
+        public int wheelGroup = 2;
+
         [Header("Ground")]
         public bool buildGround = true;
         public Vector3 groundSize = new Vector3(200.0f, 1.0f, 200.0f);
@@ -36,6 +52,7 @@ namespace PhysX5ForUnity.Samples
 
         private PhysxScene m_scene;
         private PhysxMaterial m_material;
+        private bool m_filteringConfigured;
 
         private void Start()
         {
@@ -47,8 +64,19 @@ namespace PhysX5ForUnity.Samples
                 return;
             }
 
+            // The wheels simulate as cylinders but must not collide with the road, which the
+            // suspension raycast and tire model already resolve. Configure the process-global
+            // group table once during construction, and reset it on teardown.
+            PhysxCollisionGroups.SetPairCollides(wheelGroup, roadGroup, false);
+            m_filteringConfigured = true;
+
             if (buildGround) BuildGround();
             BuildVehicle();
+        }
+
+        private void OnDestroy()
+        {
+            if (m_filteringConfigured) PhysxCollisionGroups.ResetToDefault();
         }
 
         private void BuildGround()
@@ -65,6 +93,7 @@ namespace PhysX5ForUnity.Samples
 
             PhysxShape shape = ground.AddComponent<PhysxShape>();
             shape.Material = m_material;
+            shape.CollisionGroup = roadGroup;
 
             PhysxStaticRigidActor actor = ground.AddComponent<PhysxStaticRigidActor>();
             actor.Scene = m_scene;
@@ -74,21 +103,34 @@ namespace PhysX5ForUnity.Samples
 
         private void BuildVehicle()
         {
-            // Reusable part data (would normally be shared ScriptableObject assets).
+            float gravity = Mathf.Max(0.01f, m_scene.Gravity.magnitude);
+            float sprungMass = chassisMass / 4.0f;
+
+            // Author the spring explicitly: pick the stiffness that rests at the requested jounce
+            // under gravity, and the damping from the requested ratio. No runtime synthesis.
+            float clampedRest = Mathf.Clamp(restJounce, 0.001f, suspensionTravel);
+            float stiffness = sprungMass * gravity / clampedRest;
+            float damping = 2.0f * dampingRatio * Mathf.Sqrt(stiffness * sprungMass);
+            float restLoad = sprungMass * gravity;
+
             PhysxVehicleWheel wheelAsset = ScriptableObject.CreateInstance<PhysxVehicleWheel>();
             wheelAsset.radius = wheelRadius;
             wheelAsset.halfWidth = wheelHalfWidth;
             wheelAsset.mass = 20.0f;
 
             PhysxVehicleTire tireAsset = ScriptableObject.CreateInstance<PhysxVehicleTire>();
-            PhysxVehicleSuspension suspAsset = ScriptableObject.CreateInstance<PhysxVehicleSuspension>();
-            suspAsset.travelDistance = 0.25f;
+            tireAsset.restLoad = restLoad;
 
-            GameObject vehicleGO = new GameObject(driveType + " Vehicle");
+            PhysxVehicleSuspension suspAsset = ScriptableObject.CreateInstance<PhysxVehicleSuspension>();
+            suspAsset.travelDistance = suspensionTravel;
+            suspAsset.stiffness = stiffness;
+            suspAsset.damping = damping;
+            suspAsset.sprungMass = sprungMass;
+
+            GameObject vehicleGO = new GameObject("Standard Engine Drive Vehicle");
             vehicleGO.SetActive(false);
             vehicleGO.transform.position = spawnPosition;
 
-            // Chassis visual.
             GameObject body = GameObject.CreatePrimitive(PrimitiveType.Cube);
             body.name = "Body";
             Destroy(body.GetComponent<Collider>());
@@ -101,39 +143,38 @@ namespace PhysX5ForUnity.Samples
             PhysxVehicle vehicle = vehicleGO.AddComponent<PhysxVehicle>();
             vehicle.Scene = m_scene;
             vehicle.chassisMaterial = m_material;
-            vehicle.driveType = driveType;
-            vehicle.differentialType = differentialType;
-            vehicle.useDirectWheelControl = useDirectWheelControl;
+            vehicle.driveType = PhysxVehicle.VehicleDriveType.Engine;
+            vehicle.differentialType = PxVehicleDifferentialType.eMULTIWHEEL;
+            vehicle.useDirectWheelControl = false;
             vehicle.mass = chassisMass;
             vehicle.boxHalfExtents = chassisHalfExtents;
             vehicle.centerOfMass = new Vector3(0.0f, -0.25f, 0.0f);
+            vehicle.maxBrakeTorque = maxBrakeTorque;
+            vehicle.maxHandbrakeTorque = maxHandbrakeTorque;
+            vehicle.maxSteerAngle = maxSteerAngle;
+            vehicle.ackermannEnabled = false;
 
-            if (driveType == PhysxVehicle.VehicleDriveType.Engine)
-            {
-                vehicle.engine = ScriptableObject.CreateInstance<PhysxVehicleEngine>();
-                vehicle.gearbox = ScriptableObject.CreateInstance<PhysxVehicleGearbox>();
-                vehicle.autobox = ScriptableObject.CreateInstance<PhysxVehicleAutobox>();
-                vehicle.clutch = ScriptableObject.CreateInstance<PhysxVehicleClutch>();
-            }
+            // Engine-drive requires its full drivetrain; the wrapper validates it, so assign all four.
+            vehicle.engine = ScriptableObject.CreateInstance<PhysxVehicleEngine>();
+            vehicle.gearbox = ScriptableObject.CreateInstance<PhysxVehicleGearbox>();
+            vehicle.autobox = ScriptableObject.CreateInstance<PhysxVehicleAutobox>();
+            vehicle.clutch = ScriptableObject.CreateInstance<PhysxVehicleClutch>();
 
-            // Four wheels: front axle steers, rear axle handbrakes; all driven.
-            CreateWheel(vehicleGO.transform, "Wheel FL", new Vector3(-trackHalfWidth, wheelVerticalOffset, wheelBaseHalf), 0, 0, true, false, wheelAsset, tireAsset, suspAsset, vehicle);
-            CreateWheel(vehicleGO.transform, "Wheel FR", new Vector3(trackHalfWidth, wheelVerticalOffset, wheelBaseHalf), 0, 1, true, false, wheelAsset, tireAsset, suspAsset, vehicle);
-            CreateWheel(vehicleGO.transform, "Wheel RL", new Vector3(-trackHalfWidth, wheelVerticalOffset, -wheelBaseHalf), 1, 0, false, true, wheelAsset, tireAsset, suspAsset, vehicle);
-            CreateWheel(vehicleGO.transform, "Wheel RR", new Vector3(trackHalfWidth, wheelVerticalOffset, -wheelBaseHalf), 1, 1, false, true, wheelAsset, tireAsset, suspAsset, vehicle);
+            // Front axle steers and is not driven; rear axle is driven and handbrakes (RWD).
+            CreateWheel(vehicleGO.transform, "Wheel FL", new Vector3(-trackHalfWidth, wheelVerticalOffset, wheelBaseHalf), 0, 0, driven: false, steering: true, handbrake: false, wheelAsset, tireAsset, suspAsset);
+            CreateWheel(vehicleGO.transform, "Wheel FR", new Vector3(trackHalfWidth, wheelVerticalOffset, wheelBaseHalf), 0, 1, driven: false, steering: true, handbrake: false, wheelAsset, tireAsset, suspAsset);
+            CreateWheel(vehicleGO.transform, "Wheel RL", new Vector3(-trackHalfWidth, wheelVerticalOffset, -wheelBaseHalf), 1, 0, driven: true, steering: false, handbrake: true, wheelAsset, tireAsset, suspAsset);
+            CreateWheel(vehicleGO.transform, "Wheel RR", new Vector3(trackHalfWidth, wheelVerticalOffset, -wheelBaseHalf), 1, 1, driven: true, steering: false, handbrake: true, wheelAsset, tireAsset, suspAsset);
 
-            if (!useDirectWheelControl)
-            {
-                PhysxVehicleController controller = vehicleGO.AddComponent<PhysxVehicleController>();
-                controller.readKeyboardInput = true;
-            }
+            PhysxVehicleController controller = vehicleGO.AddComponent<PhysxVehicleController>();
+            controller.readKeyboardInput = true;
 
             vehicleGO.SetActive(true);
         }
 
         private void CreateWheel(Transform parent, string wheelName, Vector3 localPos, int axle, int indexInAxle,
-            bool steering, bool handbrake, PhysxVehicleWheel wheelAsset, PhysxVehicleTire tireAsset,
-            PhysxVehicleSuspension suspAsset, PhysxVehicle vehicle)
+            bool driven, bool steering, bool handbrake, PhysxVehicleWheel wheelAsset, PhysxVehicleTire tireAsset,
+            PhysxVehicleSuspension suspAsset)
         {
             GameObject wheelGO = new GameObject(wheelName);
             wheelGO.transform.SetParent(parent, false);
@@ -153,13 +194,16 @@ namespace PhysX5ForUnity.Samples
             attach.suspension = suspAsset;
             attach.axle = axle;
             attach.indexInAxle = indexInAxle;
-            attach.isDriven = true;
+            attach.isDriven = driven;
             attach.isSteering = steering;
             attach.isHandbrake = handbrake;
             attach.wheelVisual = visual.transform;
 
-            if (vehicle.useDirectWheelControl)
-                wheelGO.AddComponent<PhysxVehicleWheelController>();
+            // Exact, rotation-invariant cylinder wheels, filtered off the road group.
+            attach.geometryMode = PxwVehicleWheelGeometryMode.Cylinder;
+            attach.isSimulationShape = true;
+            attach.isSceneQueryShape = false;
+            attach.collisionGroup = wheelGroup;
         }
     }
 }

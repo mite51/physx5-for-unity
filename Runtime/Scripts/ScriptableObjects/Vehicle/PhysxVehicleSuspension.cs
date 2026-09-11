@@ -11,16 +11,17 @@ namespace PhysX5ForUnity
     [CreateAssetMenu(fileName = "PhysXVehicleSuspension", menuName = "PhysX 5/Vehicle/Suspension", order = 21)]
     public class PhysxVehicleSuspension : ScriptableObject
     {
-        [Tooltip("Maximum suspension travel distance in metres.")]
+        [Tooltip("Maximum suspension travel distance in metres. Must be > 0.")]
         public float travelDistance = 0.2f;
 
-        [Tooltip("Spring stiffness (N/m). If <= 0 it is derived from the sprung mass and travel at Finalize time.")]
+        [Tooltip("Spring stiffness (N/m). Authored explicitly; must be > 0. Nothing is synthesised.")]
         public float stiffness = 0.0f;
 
-        [Tooltip("Spring damping (Ns/m). If <= 0 it is derived from the sprung mass at Finalize time.")]
+        [Tooltip("Spring damping (Ns/m). Authored explicitly; must be >= 0. Nothing is synthesised.")]
         public float damping = 0.0f;
 
-        [Tooltip("Sprung mass carried by this suspension in kilograms. If <= 0 it is distributed automatically.")]
+        [Tooltip("Sprung mass carried by this suspension in kilograms. Authored explicitly; must be > 0. " +
+                 "Used with gravity and stiffness to place the maximum-compression attachment.")]
         public float sprungMass = 0.0f;
 
         /// <summary>

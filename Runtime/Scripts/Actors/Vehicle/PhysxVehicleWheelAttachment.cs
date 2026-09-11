@@ -5,9 +5,13 @@ namespace PhysX5ForUnity
     /// <summary>
     /// One wheel of a <see cref="PhysxVehicle"/>, mirroring Omniverse's per-wheel
     /// PhysxVehicleWheelAttachmentAPI. References the reusable wheel / tire /
-    /// suspension assets and authors the suspension frame from its own transform
-    /// (relative to the vehicle chassis). Add one per wheel as a child of the
-    /// vehicle GameObject.
+    /// suspension assets. Add one per wheel as a child of the vehicle GameObject.
+    ///
+    /// Pose contract (the only one): this transform is the wheel's <b>actor-local nominal
+    /// ride-height centre</b> — where the wheel sits at rest under gravity, in the vehicle's own
+    /// frame. The maximum-compression suspension attachment PhysX wants is derived from it (see
+    /// <see cref="GetSuspensionDesc"/>), and the native bridge converts actor-local to COM-local,
+    /// so the wheel settles exactly where you place it regardless of the centre of mass.
     /// </summary>
     [AddComponentMenu("PhysX 5/Vehicle/PhysX Vehicle Wheel Attachment")]
     public class PhysxVehicleWheelAttachment : MonoBehaviour
@@ -79,16 +83,55 @@ namespace PhysX5ForUnity
         /// <summary>Wheel id assigned by the owning vehicle at build time.</summary>
         public int WheelId { get; internal set; } = -1;
 
+        /// <summary>
+        /// Validates that this wheel carries the explicit part assets the single canonical setup
+        /// requires. There are deliberately no silent defaults: an unassigned wheel/tire/suspension
+        /// asset is a configuration error, not something to paper over with a fabricated part.
+        /// </summary>
+        public bool Validate(string vehicleName)
+        {
+            bool ok = true;
+            if (wheel == null)
+            {
+                Debug.LogError($"PhysxVehicleWheelAttachment '{name}' (vehicle '{vehicleName}'): no wheel asset assigned.", this);
+                ok = false;
+            }
+            if (tire == null)
+            {
+                Debug.LogError($"PhysxVehicleWheelAttachment '{name}' (vehicle '{vehicleName}'): no tire asset assigned.", this);
+                ok = false;
+            }
+            if (suspension == null)
+            {
+                Debug.LogError($"PhysxVehicleWheelAttachment '{name}' (vehicle '{vehicleName}'): no suspension asset assigned.", this);
+                ok = false;
+            }
+            else
+            {
+                if (suspension.travelDistance <= 0.0f)
+                {
+                    Debug.LogError($"PhysxVehicleWheelAttachment '{name}': suspension travel distance must be > 0.", this);
+                    ok = false;
+                }
+                if (suspension.stiffness <= 0.0f || suspension.damping < 0.0f || suspension.sprungMass <= 0.0f)
+                {
+                    Debug.LogError($"PhysxVehicleWheelAttachment '{name}': suspension stiffness, damping and sprung mass " +
+                        "must be authored explicitly (stiffness > 0, damping >= 0, sprungMass > 0). The canonical setup " +
+                        "does not synthesise them.", this);
+                    ok = false;
+                }
+            }
+            if (tire != null && tire.restLoad <= 0.0f)
+            {
+                Debug.LogError($"PhysxVehicleWheelAttachment '{name}': tire rest load must be authored explicitly (> 0).", this);
+                ok = false;
+            }
+            return ok;
+        }
+
         public PxwVehicleWheelDesc GetWheelDesc()
         {
-            return wheel != null ? wheel.ToDesc() : new PxwVehicleWheelDesc
-            {
-                radius = 0.35f,
-                halfWidth = 0.15f,
-                mass = 20.0f,
-                moi = 0.5f * 20.0f * 0.35f * 0.35f,
-                dampingRate = 0.25f
-            };
+            return wheel.ToDesc();
         }
 
         /// <summary>
@@ -136,29 +179,47 @@ namespace PhysX5ForUnity
 
         public PxwVehicleTireDesc GetTireDesc()
         {
-            if (tire != null) return tire.ToDesc();
-            return ScriptableObject.CreateInstance<PhysxVehicleTire>().ToDesc();
+            return tire.ToDesc();
         }
 
         /// <summary>
-        /// Builds the suspension descriptor, sampling the reusable spring asset and
-        /// deriving the attachment pose from this transform relative to the vehicle.
+        /// Builds the suspension descriptor for the single canonical pose contract.
+        ///
+        /// The Unity wheel transform is the <b>actor-local nominal ride-height centre</b>: where the
+        /// wheel sits at rest under gravity. PhysX Vehicle2 instead wants the suspension attachment
+        /// expressed at <b>maximum compression</b> (jounce == travel distance), with the wheel hanging
+        /// below it along the travel direction. This method derives that maximum-compression frame from
+        /// the authored nominal centre so the wheel settles exactly at the transform the designer sees.
+        ///
+        /// rest jounce  = sprungMass * |g| / stiffness (clamped to travel)
+        /// attachment   = nominal - travelDir * (travel - restJounce)
+        ///
+        /// The result stays actor-local; the native bridge converts it to COM-local.
         /// </summary>
-        public PxwVehicleSuspensionDesc GetSuspensionDesc(Transform vehicleTransform, float sprungMassFallback)
+        public PxwVehicleSuspensionDesc GetSuspensionDesc(Transform vehicleTransform, float gravityMagnitude)
         {
-            PxwVehicleSuspensionDesc desc = suspension != null
-                ? suspension.ToDesc()
-                : ScriptableObject.CreateInstance<PhysxVehicleSuspension>().ToDesc();
+            PxwVehicleSuspensionDesc desc = suspension.ToDesc();
 
-            Vector3 localPos = vehicleTransform.InverseTransformPoint(transform.position);
+            Vector3 nominalLocalPos = vehicleTransform.InverseTransformPoint(transform.position);
             Quaternion localRot = Quaternion.Inverse(vehicleTransform.rotation) * transform.rotation;
-            desc.suspensionAttachment = new PxTransformData(localPos, localRot);
 
             Vector3 dir = travelDirectionLocal.sqrMagnitude > 1e-6f ? travelDirectionLocal.normalized : Vector3.down;
+
+            float travel = desc.travelDist > 0.0f ? desc.travelDist : suspension.travelDistance;
+            float stiffness = desc.stiffness > 0.0f ? desc.stiffness : suspension.stiffness;
+            float sprungMass = desc.sprungMass > 0.0f ? desc.sprungMass : suspension.sprungMass;
+
+            float restJounce = 0.0f;
+            if (stiffness > 0.0f && gravityMagnitude > 0.0f)
+            {
+                restJounce = Mathf.Clamp(sprungMass * gravityMagnitude / stiffness, 0.0f, travel);
+            }
+
+            Vector3 attachmentLocalPos = nominalLocalPos - dir * (travel - restJounce);
+
+            desc.suspensionAttachment = new PxTransformData(attachmentLocalPos, localRot);
             desc.travelDir = dir;
             desc.wheelAttachment = new PxTransformData(Vector3.zero, Quaternion.identity);
-
-            if (desc.sprungMass <= 0.0f) desc.sprungMass = sprungMassFallback;
             return desc;
         }
 

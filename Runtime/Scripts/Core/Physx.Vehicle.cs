@@ -7,6 +7,14 @@ namespace PhysX5ForUnity
     {
         // Vehicles (PhysX Vehicle2)
 
+        // Scene context. Configures the explicit, scene-wide vehicle simulation context (PhysX
+        // actor update mode, tire slip denominators, substep policy). Must be called before the
+        // first vehicle is added to the scene; the context is immutable afterwards. Returns true
+        // when applied.
+        [DllImport(PHYSX_DLL)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool SetVehicleSceneContext(IntPtr scene, ref PxwVehicleSceneContextDesc desc);
+
         // Lifecycle
 
         [DllImport(PHYSX_DLL)]
@@ -94,6 +102,10 @@ namespace PhysX5ForUnity
         [DllImport(PHYSX_DLL)]
         public static extern void SetVehicleCommands(IntPtr vehicle, float brake0, float brake1, float throttle, float steer);
 
+        /// <summary>Clear vehicle integrators after teleporting, without changing its registered actor or tuning.</summary>
+        [DllImport(PHYSX_DLL, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void ResetVehicleState(IntPtr vehicle);
+
         [DllImport(PHYSX_DLL)]
         public static extern void SetVehicleTransmissionCommand(IntPtr vehicle, int targetGear, float clutch);
 
@@ -114,6 +126,13 @@ namespace PhysX5ForUnity
 
         [DllImport(PHYSX_DLL)]
         public static extern void GetVehicleDriveState(IntPtr vehicle, out PxwVehicleDriveState dest);
+
+        // Diagnostic readback for parity traces.
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetVehicleWheelTelemetry(IntPtr vehicle, [In, Out] PxwVehicleWheelTelemetry[] destArray, int length);
+
+        [DllImport(PHYSX_DLL)]
+        public static extern void GetVehicleBodyTelemetry(IntPtr vehicle, out PxwVehicleBodyTelemetry dest);
 
         [DllImport(PHYSX_DLL)]
         public static extern IntPtr GetVehicleActor(IntPtr vehicle);

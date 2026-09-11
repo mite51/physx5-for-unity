@@ -98,6 +98,40 @@ timer, autobox and clutch for engine-drive) is captured in the physics channel; 
 output is recomputed. So the managed `CaptureState`/`RestoreState` only needs whatever gameplay
 state the car adds, such as a boost charge.
 
+## The one pose contract
+
+There is a single pose convention and no compatibility mode. A wheel's Unity transform is the
+**actor-local nominal ride-height centre**: the exact place the wheel sits at rest under gravity,
+in the vehicle's own (rigid-body/actor) frame. That is the pose the designer sees and the pose the
+wheel visual returns to when the car is parked.
+
+PhysX Vehicle2 does not consume that pose directly. It wants the suspension **attachment** at
+maximum compression (jounce equal to the full travel distance), with the wheel hanging below it
+along the travel direction. `PhysxVehicleWheelAttachment.GetSuspensionDesc` derives that frame from
+the authored nominal centre, using the explicit sprung mass, gravity and stiffness:
+
+```
+restJounce = clamp(sprungMass * |gravity| / stiffness, 0, travelDistance)
+attachment = nominal - travelDir * (travelDistance - restJounce)
+```
+
+Because every spring value is authored explicitly (there is no synthesis of stiffness, damping,
+sprung mass or rest load), the wheel settles exactly on the transform you placed.
+
+The derived attachment stays **actor-local**. The native bridge converts it to COM-local with
+`inverse(cmassLocalPose) * attachment` when it builds the vehicle, and converts wheel-state readback
+back with `cmassLocalPose * wheelLocalPose`, so moving the centre of mass never moves the wheels in
+world space. Nothing in Unity has to know where the COM is.
+
+## Scene owns the vehicle context
+
+Update mode, tire slip denominators and the substep policy are **scene-wide**, not per-vehicle.
+They live on the `PhysxScene` asset (see its *Vehicle context* section) and are pushed to the native
+scene once, at scene creation, before any vehicle registers. The context becomes immutable at first
+vehicle registration, so every vehicle in one native scene provably shares one update mode, one set
+of slip denominators and one substep policy. The canonical profile is `ApplyVelocity`, slip
+denominators `0.1 / 4 / 1`, and `3/3` substeps switching at `5 m/s`.
+
 ## Wheel collision shapes
 
 A wheel's collision shape is off by default, and that is a real default rather than an oversight.

@@ -306,4 +306,58 @@ namespace PhysX5ForUnity
         public float longitudinalSpeed;
         public float lateralSpeed;
     }
+
+    // Mirrors pxw::PxwVehicleSceneContextDesc. One of these is owned per PhysX scene and is
+    // immutable once the first vehicle has been registered against that scene, so every vehicle
+    // in a scene shares one update mode, one set of slip denominators and one substep policy.
+    public enum PxVehiclePhysXActorUpdateMode
+    {
+        // Matches PxVehiclePhysXActorUpdateMode: 0 = apply velocity, 1 = apply acceleration.
+        ApplyVelocity = 0,
+        ApplyAcceleration = 1
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PxwVehicleSceneContextDesc
+    {
+        public int physxActorUpdateMode;
+
+        // Tire slip denominators (PxVehicleTireSlipParams). A value <= 0 keeps the PhysX default.
+        public float minActiveLongSlipDenominator;
+        public float minPassiveLongSlipDenominator;
+        public float minLatSlipDenominator;
+
+        // Substep policy for the suspension/tire/wheel substep group. Below the threshold forward
+        // speed the group runs lowSubstepCount times, at or above it highSubstepCount times.
+        public int lowSubstepCount;
+        public int highSubstepCount;
+        public float substepThresholdSpeed;
+    }
+
+    // Mirrors pxw::PxwVehicleWheelTelemetry. Per-wheel diagnostic readback for parity traces.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PxwVehicleWheelTelemetry
+    {
+        public float jounce;
+        public float suspensionForce;
+        public float tireLoad;
+        public float friction;
+        public float longitudinalSlip;
+        public float lateralSlip;
+        public float longitudinalTireForce;
+        public float lateralTireForce;
+        public float rotationSpeed;
+        public float steerAngle;
+    }
+
+    // Mirrors pxw::PxwVehicleBodyTelemetry. Whole-body diagnostic readback for parity traces.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PxwVehicleBodyTelemetry
+    {
+        public Vector3 linearVelocity;
+        public Vector3 angularVelocity;
+        public float longitudinalSpeed;
+        public float lateralSpeed;
+        public float yawRate;
+    }
 }
