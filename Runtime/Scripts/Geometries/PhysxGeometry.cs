@@ -47,6 +47,7 @@ namespace PhysX5ForUnity
 
         public void CreateOrGetSharedGeometry()
         {
+            if (m_nativeObjectPtr != IntPtr.Zero) return;
             m_uniqueKey = GenerateUniqueKey();
             if (sm_sharedGeometries.TryGetValue(m_uniqueKey, out (IntPtr ptr, int refCount) entry))
             {
@@ -61,6 +62,12 @@ namespace PhysX5ForUnity
         }
 
         protected abstract void CreateGeometry();
+
+        protected void RequireUncreatedGeometry()
+        {
+            if (m_nativeObjectPtr != IntPtr.Zero)
+                throw new InvalidOperationException("Geometry authoring cannot change after native creation. Rebuild the owning actor, shape and geometry from new descriptors.");
+        }
 
         protected virtual void DestroyGeometry()
         {

@@ -3,7 +3,9 @@
 
 A Unity plugin for using PhysX 5 to simulate FEM soft bodies, PBD cloth and fluid, rigid bodies, articulations and vehicles.
 
-This is a basic implementation with many features missing — scene query, for one, is not exposed. Collision filtering is available: per-shape filter data and PhysX's group collision table are reachable through `PhysxCollisionGroups`.
+This is a basic implementation with many features missing. Bounded scene queries are exposed through UNDPWR's `SimQuery`; general standalone collider discovery is not provided. Collision filtering is available through `PhysxCollisionGroups`.
+
+The [TD-1 handoff](TD1_HANDOFF.md) documents verified live readback, capsule migration, filtering ownership, and CPU kinematic rollback. See [release notes](CHANGELOG.md) before upgrading existing assets or snapshot sessions.
 
 ## Geometries
 

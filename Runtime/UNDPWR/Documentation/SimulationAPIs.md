@@ -44,7 +44,7 @@ a pooled entity, never for ordinary movement. The pool does this for you on spaw
 ## Scene queries: `SimQuery`
 
 [`SimQuery`](../Gameplay/SimQuery.cs) (reachable as `context.Query`) provides raycasts, overlaps
-and sweeps that resolve every hit to a stable ID and return them in a **reproducible order** —
+and sweeps that resolve collected registered rigid-body hits to stable IDs and sort them —
 rays and sweeps sorted by distance with stable ID breaking ties, overlaps sorted by stable ID.
 This is the whole point: Unity's own `Physics.Raycast`/`OverlapSphere` return hits in an order
 PhysX does not guarantee, so two peers iterating the same hits could pick a different "first"
@@ -53,7 +53,7 @@ one and diverge.
 ```csharp
 public override void OnResolveVolumes(int tick)
 {
-    var hits = _overlapScratch; // a caller-owned SimOverlapHit[], reused each tick — no allocation
+    var hits = _overlapScratch; // reused managed array; native collection may allocate
     int count = context.Query.OverlapSphere(hillCenter, hillRadius, filterMask: 0, hits);
     for (int i = 0; i < count; ++i)
         Capture(hits[i].StableId);
@@ -61,10 +61,20 @@ public override void OnResolveVolumes(int tick)
 ```
 
 Methods: `Raycast`, `OverlapSphere`, `OverlapBox`, `OverlapCapsule`, `SweepSphere`. Each fills a
-caller-owned array and returns how many hits were written, so a query in the tick loop does not
-allocate. If the array is smaller than the number of hits, the deterministically-ordered front
-of the list is kept (nearest for rays/sweeps, lowest-ID for overlaps). A `filterMask` of zero
-matches everything; otherwise it is compared against each shape's query group.
+caller-owned array and returns how many hits were written. Native collection stops at 256 touches
+before filtering and sorting, and caller capacity truncates that collected subset again. There is
+no overflow status: larger arrays cannot recover discarded hits, and deterministic membership
+is not guaranteed when collection fills. Native temporary vectors can allocate. Articulation
+links and unregistered actors are omitted; results have no shape identity. Use a registry for
+complete source enumeration.
+
+`filterMask` is a **body-kind mask**: zero matches all registered kinds; otherwise use, for example,
+`1u << (int)SimHandleKind.RigidDynamic` (1), `RigidStatic` (2), `RigidKinematic` (4), or `Vehicle` (16).
+These bits do not refer to simulation groups or shape query-filter words. The articulation bit
+does not make articulation links discoverable in the existing query lookup.
+
+`OverlapCapsule` uses native local X, rotated by the supplied quaternion. `halfHeight` is half
+the cylinder length, excluding endcaps; total length is `2 * (halfHeight + radius)`.
 
 For a one-off overlap check, an explicit `OverlapSphere`/`OverlapBox` in a step handler is often
 clearer than a trigger volume, because it is evaluated at a known point in the tick rather than

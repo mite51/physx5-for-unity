@@ -13,8 +13,10 @@ namespace PhysX5ForUnity
     /// <para><b>This table is process-global.</b> It lives in PhysX's extensions library, not in
     /// a scene, so it is shared by every world in the process and it outlives any one of them.
     /// Two consequences follow. In the editor it survives leaving Play mode, so call
-    /// <see cref="ResetToDefault"/> on teardown rather than leaving a session's filtering behind
-    /// for whatever runs next. And in a networked deterministic session every peer must
+    /// <see cref="ResetToDefault"/> only after ALL worlds using the table have shut down.
+    /// A single world's teardown must not reset another world's filtering. A caller-owned
+    /// process/session coordinator should configure the table before constructing worlds.
+    /// In a networked deterministic session every peer must
     /// configure it identically: differing tables make peers simulate differently while every
     /// actor, shape and geometry still hashes the same. The construction hash folds the table in
     /// for exactly that reason, so a disagreement surfaces at the hash exchange instead of as an
@@ -62,8 +64,8 @@ namespace PhysX5ForUnity
         }
 
         /// <summary>
-        /// Restores the all-pairs-collide default. Call this when tearing a session down so the
-        /// table does not leak into the next one running in the same process.
+        /// Restores the all-pairs-collide default. Only the process/session owner may call this,
+        /// after all worlds using the table have shut down. Runtime refiltering is not provided.
         /// </summary>
         public static void ResetToDefault()
         {

@@ -16,23 +16,57 @@ namespace PhysX5ForUnity
         public float Radius
         {
             get { return m_radius; }
-            set { m_radius = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
+            set { RequireUncreatedGeometry(); ValidateDimensions(value, m_height); m_radius = value; }
         }
 
         public float Height
         {
             get { return m_height; }
-            set { m_height = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
+            set { RequireUncreatedGeometry(); ValidateDimensions(m_radius, value); m_height = value; }
         }
 
         public CapsuleDirection Direction
         {
             get { return m_direction; }
-            set { m_direction = value; } // This setter exists for dynamic runtime construction. Setting it after the object is registered with an active simulation will have no effect.
+            set { RequireUncreatedGeometry(); DirectionRotation(value); m_direction = value; }
         }
+
+        /// <summary>Opt in to direction-aware shapes. Missing serialized values retain legacy local X.</summary>
+        public bool UseAuthoredDirection
+        {
+            get { return m_useAuthoredDirection; }
+            set { RequireUncreatedGeometry(); m_useAuthoredDirection = value; }
+        }
+
+        /// <summary>Native local X mapped into the authored shape frame.</summary>
+        public Quaternion NativeLocalRotation => m_useAuthoredDirection ? DirectionRotation(m_direction) : Quaternion.identity;
+
+        public static Quaternion DirectionRotation(CapsuleDirection direction)
+        {
+            const float s = 0.7071067811865475f;
+            switch (direction)
+            {
+                case CapsuleDirection.XAxis: return Quaternion.identity;
+                case CapsuleDirection.YAxis: return new Quaternion(0, 0, s, s);
+                case CapsuleDirection.ZAxis: return new Quaternion(0, -s, 0, s);
+                default: throw new ArgumentOutOfRangeException(nameof(direction));
+            }
+        }
+
+        private static void ValidateDimensions(float radius, float height)
+        {
+            if (float.IsNaN(radius) || float.IsInfinity(radius) || radius <= 0 ||
+                float.IsNaN(height) || float.IsInfinity(height) || height < 0)
+                throw new ArgumentOutOfRangeException("Capsule dimensions require finite radius > 0 and cylinder height >= 0.");
+        }
+
+        // Reset is called when adding a new component in the Editor, not when loading legacy assets.
+        private void Reset() { m_useAuthoredDirection = true; }
 
         protected override void CreateGeometry()
         {
+            ValidateDimensions(m_radius, m_height);
+            DirectionRotation(m_direction);
             float[] shapeParams = new float[3];
             shapeParams[0] = m_radius;
             shapeParams[1] = m_height * 0.5f;
@@ -44,28 +78,14 @@ namespace PhysX5ForUnity
         }
         void OnDrawGizmosSelected()
         {
-            if(m_radius>0 && m_height>0)
+            if(m_radius>0 && m_height>=0)
             {
                 Gizmos.color = Color.yellow;
 
                 float height = m_height; // Height of the cylindrical portion
                 height = Mathf.Max(height, 0);
 
-                Quaternion directionRotation = Quaternion.identity;
-                switch (m_direction)
-                {
-                    case CapsuleDirection.XAxis:
-                        directionRotation = Quaternion.Euler(0, 90, 0);
-                        break;
-                    case CapsuleDirection.YAxis:
-                        directionRotation = Quaternion.Euler(90, 0, 0);
-                        break;
-                    case CapsuleDirection.ZAxis:
-                        directionRotation = Quaternion.Euler(0, 0, 0);
-                        break;
-                }
-
-                Vector3 direction = (transform.rotation * directionRotation) * Vector3.forward;
+                Vector3 direction = (transform.rotation * NativeLocalRotation) * Vector3.right;
                 //direction.Normalize();
                 Vector3 cylinderPos = transform.position;
 
@@ -193,6 +213,9 @@ namespace PhysX5ForUnity
         private float m_height = 0.5f;
         [SerializeField]
         private CapsuleDirection m_direction = CapsuleDirection.XAxis;
+        [SerializeField]
+        [Tooltip("Enable direction-aware native shapes. Legacy assets keep local X until explicitly migrated. Remove any old compensating Transform rotation when migrating. Primitive dimensions ignore Transform scale.")]
+        private bool m_useAuthoredDirection;
     }
 }
 

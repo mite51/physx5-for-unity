@@ -31,8 +31,11 @@ It cannot run tests that call into Unity native code — `Quaternion.Euler` and 
 that needs the editor, mark it the same way rather than letting this suite go red, and run it
 from Unity's Test Runner.
 
-It also cannot cover anything that needs the native PhysX plugin, which is most of what the
-framework actually does. Rollback, snapshots, hashing of real world state and the determinism
-measurements all live in the native suite in `physx5-native-plugin/tests`. This harness covers
-the pure-managed contracts underneath them: configuration validation and hashing, the input
-buffer, the state channels, action queue and phase machine serialization, and input encoding.
+The default run covers pure-managed contracts: configuration validation and hashing, the input
+buffer, state channels, action queue, phase machine serialization, and input encoding.
+Set `PHYSX_NATIVE_DIR` to the absolute delivered plugin directory and put that directory on PATH
+to enable `DeliveredPluginTests`. It verifies exports/ABI and readback/restore for all four actor
+types against the actual shipped DLL, including kinematic velocity rollback and offset COM.
+Run it in a fresh test process, with matching PhysX dependencies. Broader determinism tests live
+in `physx5-native-plugin/tests`. The component attachment fixture is available in Unity via
+Tools / PhysX / Run TD1 Contract Checks; see `TD1_HANDOFF.md` for reproduction commands.

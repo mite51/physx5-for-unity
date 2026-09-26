@@ -27,8 +27,8 @@ The table is process-global rather than per-world: it lives in PhysX's extension
 it is shared by every world in the process and it survives leaving Play mode in the editor.
 Two things follow. Configure it from authored data during world construction, never from
 gameplay code that might run at a different time on a different machine. And call
-`PhysxCollisionGroups.ResetToDefault()` when tearing a session down, or the next session in
-the same process inherits this one's filtering and fails admission for no visible reason.
+`PhysxCollisionGroups.ResetToDefault()` only from the process/session owner after **all** worlds
+have shut down. Individual world disposal preserves filtering for the worlds still running.
 
 Only disabled pairs contribute to the hash, so a session that never touches groups hashes as
 though the feature did not exist.

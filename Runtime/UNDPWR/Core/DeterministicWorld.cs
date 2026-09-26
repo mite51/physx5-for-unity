@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using PhysX5ForUnity;
 using UNDPWR.Diagnostics;
 using UNDPWR.Interop;
 
@@ -625,7 +624,7 @@ namespace UNDPWR.Core
         /// </para>
         /// <para>
         /// The aggregate also folds in the process-global collision group table
-        /// (<see cref="PhysxCollisionGroups"/>), which is not attached to any one entity. When
+        /// (PhysX5ForUnity.PhysxCollisionGroups), which is not attached to any one entity. When
         /// this hash disagrees but <see cref="ReadConstructionHashes"/> matches on every entry
         /// between two peers, the group table is the remaining suspect: it is deliberately kept
         /// out of the per-entry breakdown so an aggregate-only mismatch points straight at it.
@@ -765,11 +764,8 @@ namespace UNDPWR.Core
             _entities.Clear();
             _pendingCommit.Clear();
 
-            // The collision group table is process-global and outlives this world (see
-            // PhysxCollisionGroups), so a session's filtering would otherwise leak into whatever
-            // runs next -- most visibly across editor Play sessions. Reset it here, when the
-            // session ends, not during a native-world rebuild, which reuses the same table.
-            PhysxCollisionGroups.ResetToDefault();
+            // Collision groups are process-global. Only the process/session owner may reset
+            // them, after every world has shut down; disposing this world must preserve peers.
 
             SimLog.Info("World destroyed");
         }

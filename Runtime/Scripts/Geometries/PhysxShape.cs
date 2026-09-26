@@ -68,6 +68,7 @@ namespace PhysX5ForUnity
         private void CreateExclusiveShape()
         {
             m_nativeObjectPtr = Physx.CreateShape(m_geometry.NativeObjectPtr, m_material.NativeObjectPtr, isExclusive);
+            Physx.SetShapeLocalPose(m_nativeObjectPtr, ref m_createdLocalPose);
             ApplyFilterData();
         }
 
@@ -93,6 +94,9 @@ namespace PhysX5ForUnity
 
         private void CreateShape()
         {
+            if (m_nativeObjectPtr != IntPtr.Zero) return;
+            m_geometry = GetComponent<PhysxGeometry>();
+            m_createdLocalPose = CalculateLocalPose();
             if(m_material == null)
             {
                 //m_material = Resources.Load<PhysxRigidMaterial>("PhysX Physic Materials/PhysXDefaultRigidMaterial");
@@ -133,8 +137,29 @@ namespace PhysX5ForUnity
             // The collision group is part of the key because it is per-shape state: two
             // components sharing one native shape would otherwise each overwrite the other's
             // group, and the last one to initialise would silently decide the filtering for both.
-            return $"{m_geometry.NativeObjectPtr}_{m_material.GetEntityId()}_{m_collisionGroup}"; // this is ugly but seems to work.
+            var p = m_createdLocalPose.position;
+            var q = m_createdLocalPose.quaternion;
+            return FormattableString.Invariant($"{m_geometry.NativeObjectPtr}_{m_material.GetEntityId()}_{m_collisionGroup}_{p.x:R}_{p.y:R}_{p.z:R}_{q.x:R}_{q.y:R}_{q.z:R}_{q.w:R}");
         }
+
+        // Establish per-shape state before attachment (shared attached shapes cannot be mutated).
+        private PxTransformData CalculateLocalPose()
+        {
+            var owner = GetComponentInParent<PhysxActor>(true);
+            var rotation = m_geometry is PhysxCapsuleGeometry capsule ? capsule.NativeLocalRotation : Quaternion.identity;
+            if (owner == null || owner.transform == transform)
+                return new PxTransformData(Vector3.zero, rotation);
+            // Direction-aware capsules use a rigid physical frame: dimensions ignore scale,
+            // while child world positions still include the authored hierarchy's scale.
+            // Preserve the original offset interpretation for legacy assets.
+            var position = m_geometry is PhysxCapsuleGeometry c && c.UseAuthoredDirection
+                ? Quaternion.Inverse(owner.transform.rotation) * (transform.position - owner.transform.position)
+                : owner.transform.InverseTransformPoint(transform.position);
+            return new PxTransformData(position,
+                Quaternion.Inverse(owner.transform.rotation) * transform.rotation * rotation);
+        }
+
+        private PxTransformData m_createdLocalPose;
 
         private static Dictionary<string, (IntPtr ptr, int refCount)> sm_sharedShapes = new Dictionary<string, (IntPtr ptr, int refCount)>();
         private string m_uniqueKey;

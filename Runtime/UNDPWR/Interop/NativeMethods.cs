@@ -48,8 +48,22 @@ namespace UNDPWR.Interop
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void PxwGetRigidBodyMassSpaceInertiaTensor(IntPtr actor, out Vector3 inertia);
 
-        [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void PxwSetRigidBodyCMassLocalPose(IntPtr actor, ref SimTransform pose);
+        // This legacy export takes position-first PxwTransformData, not SimTransform.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LegacyTransform
+        {
+            public Vector3 Position;
+            public Quaternion Rotation;
+        }
+
+        [DllImport(PhysXDll, EntryPoint = "PxwSetRigidBodyCMassLocalPose", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SetCMassLocalPoseLegacy(IntPtr actor, ref LegacyTransform pose);
+
+        internal static void PxwSetRigidBodyCMassLocalPose(IntPtr actor, ref SimTransform pose)
+        {
+            var legacy = new LegacyTransform { Position = pose.Position, Rotation = pose.Rotation };
+            SetCMassLocalPoseLegacy(actor, ref legacy);
+        }
 
         [DllImport(PhysXDll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void PxwSetActorSimulationEnabled(IntPtr actor, [MarshalAs(UnmanagedType.I1)] bool enabled);

@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-26",
+  "platform": "Windows x86_64 CPU",
+  "snapshotVersion": 4,
+  "directory": "C:/Git/physx5-for-unity/Plugins/Windows/x86_64",
+  "files": [
+    {
+      "file": "PhysXUnity.dll",
+      "sha256": "82295B69D0E8B756EB9D92998E4B3A5CF63D29D17BC83CA596B8828BA655CA81"
+    },
+    {
+      "file": "PhysX_64.dll",
+      "sha256": "67EFB1467B284D6A3550AC5724DB67DDD8BF666A0906B2C23ACA9807D2658552"
+    },
+    {
+      "file": "PhysXFoundation_64.dll",
+      "sha256": "6627F88F1FE08A7CDA8409A913E04A0218853195AB46BD1FBE3355A488ECBFF1"
+    },
+    {
+      "file": "PhysXCommon_64.dll",
+      "sha256": "595BB6709A6FD4564C2D67C5CBFBD264A32DA6FDB6CE0BBC02C86AF114E93632"
+    },
+    {
+      "file": "PhysXCooking_64.dll",
+      "sha256": "1712FDCFFCB03A716F4F245F0121816591B79CA2B6B85394FD8A97954ED26575"
+    },
+    {
+      "file": "PVDRuntime_64.dll",
+      "sha256": "A6FD6AD50333CA77A123428E40D3F6803C6911849E62B46ACE75F19F274883B2"
+    }
+  ]
+}

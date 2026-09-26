@@ -169,8 +169,8 @@ PhysxCollisionGroups.SetPairCollides(WheelGroup, RoadGroup, false);
 Then put the drivable surface's shapes in `RoadGroup` and set each attachment's `collisionGroup`
 to `WheelGroup`. Leave the chassis and everything else in `PhysxCollisionGroups.DefaultGroup`,
 which collides with everything, so wheels still hit obstacles and the chassis still hits the road.
-Call `PhysxCollisionGroups.ResetToDefault()` at teardown — the table is process-global and
-outlives the world. The group table folds into the construction hash, so a peer that configures it
+Only the process/session owner calls `PhysxCollisionGroups.ResetToDefault()`, after every world
+has shut down. The group table folds into the construction hash, so a peer that configures it
 differently is caught at join rather than desyncing later; see
 [World and actors](WorldAndActors.md#collision-geometry-and-filtering).
 

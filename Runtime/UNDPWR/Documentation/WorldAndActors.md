@@ -150,8 +150,9 @@ dimensions and margin are all hashed.
 Collision filtering is hashed too, but it needs more care than a per-shape property, because the
 group table that decides which pairs collide is **process-global** — it lives in PhysX's
 extensions library, not in a world. Configure it from authored data during construction, and
-call `PhysxCollisionGroups.ResetToDefault()` at teardown so it does not leak into the next
-session in the same process. Only the disabled pairs are hashed, so a session that never touches
+let the process/session owner call `PhysxCollisionGroups.ResetToDefault()` only after **all**
+worlds have shut down. `DeterministicWorld.Dispose()` deliberately preserves the table for other
+worlds. Only the disabled pairs are hashed, so a session that never touches
 groups is unaffected by any of this. See
 [Troubleshooting](Troubleshooting.md#collision-group-table-mismatches).
 

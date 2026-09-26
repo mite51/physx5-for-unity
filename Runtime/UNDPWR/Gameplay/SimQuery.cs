@@ -6,8 +6,8 @@ using UNDPWR.Interop;
 namespace UNDPWR.Gameplay
 {
     /// <summary>
-    /// Deterministic scene queries against a world: raycasts, overlaps and sweeps that
-    /// resolve every hit to a stable ID and return them in a reproducible order.
+    /// Legacy bounded scene queries against a DeterministicWorld. Collected registered
+    /// rigid-body hits are sorted by distance/ID (overlaps by ID).
     /// </summary>
     /// <remarks>
     /// The reproducible order is the whole point. Unity's own <c>Physics.Raycast</c> and
@@ -23,10 +23,15 @@ namespace UNDPWR.Gameplay
     /// peer.
     /// </para>
     /// <para>
-    /// Each method fills a caller-owned array and returns how many hits were written, so a
-    /// query in the tick loop does not allocate. If the array is smaller than the number of
-    /// hits, the nearest (for rays and sweeps) or lowest-ID (for overlaps) are kept, since
-    /// those are the deterministically-ordered front of the list.
+    /// Each method fills a caller-owned array. Native collection is limited to 256 touches
+    /// BEFORE filtering/sorting; native temporary vectors may allocate. Caller capacity
+    /// truncates the sorted collected subset again. Overflow is not reported, so neither
+    /// completeness nor deterministic membership is guaranteed in crowded scenes.
+    /// Articulation links and unregistered actors are omitted; hits have no shape identity.
+    /// Use an explicit source registry when complete collider discovery is required.
+    /// All filterMask arguments are body-kind bits (1u &lt;&lt; (int)SimHandleKind), with zero
+    /// matching all registered kinds. These are unrelated to simulation collision groups
+    /// and do not consult shape query-filter words.
     /// </para>
     /// </remarks>
     public sealed class SimQuery
@@ -48,8 +53,7 @@ namespace UNDPWR.Gameplay
         /// <param name="direction">Ray direction; need not be normalised.</param>
         /// <param name="maxDistance">How far to cast.</param>
         /// <param name="filterMask">
-        /// A game-defined mask compared against each shape's query group. Zero matches
-        /// everything.
+        /// Body-kind bits: 1u &lt;&lt; (int)SimHandleKind. Zero matches all registered kinds.
         /// </param>
         /// <param name="hits">Receives the hits, up to its length.</param>
         /// <returns>How many hits were written.</returns>
@@ -66,7 +70,7 @@ namespace UNDPWR.Gameplay
             }
         }
 
-        /// <summary>Finds every body overlapping a sphere, lowest stable ID first.</summary>
+        /// <summary>Collects bounded sphere overlaps, lowest stable ID first.</summary>
         public unsafe int OverlapSphere(Vector3 center, float radius, uint filterMask, SimOverlapHit[] hits)
         {
             RequireHits(hits);
@@ -80,7 +84,7 @@ namespace UNDPWR.Gameplay
             }
         }
 
-        /// <summary>Finds every body overlapping an oriented box, lowest stable ID first.</summary>
+        /// <summary>Collects bounded oriented-box overlaps, lowest stable ID first. Extents are half sizes.</summary>
         public unsafe int OverlapBox(Vector3 center, Vector3 halfExtents, Quaternion rotation, uint filterMask, SimOverlapHit[] hits)
         {
             RequireHits(hits);
@@ -93,9 +97,10 @@ namespace UNDPWR.Gameplay
         }
 
         /// <summary>
-        /// Finds every body overlapping a capsule, lowest stable ID first.
+        /// Collects bounded capsule overlaps, lowest stable ID first.
         /// </summary>
-        /// <param name="halfHeight">Half the capsule's length along its local up axis.</param>
+        /// <param name="halfHeight">Half the cylinder length along native local X, excluding endcaps.
+        /// Tip-to-tip length is 2 * (halfHeight + radius). Rotation maps local X to the world axis.</param>
         public unsafe int OverlapCapsule(Vector3 center, float radius, float halfHeight, Quaternion rotation, uint filterMask, SimOverlapHit[] hits)
         {
             RequireHits(hits);

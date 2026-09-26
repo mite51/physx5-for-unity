@@ -600,15 +600,8 @@ namespace PhysX5ForUnity
 
             Physx.SetArticulationLinkShape(NativeObjectPtr, shape.NativeObjectPtr);
 
-            // Calculate local pose if shape is on a child object
-            if (shape.transform != transform)
-            {
-                Vector3 localPos = transform.InverseTransformPoint(shape.transform.position);
-                Quaternion localRot = Quaternion.Inverse(transform.rotation) * shape.transform.rotation;
-                
-                PxTransformData localPose = new PxTransformData(localPos, localRot);
-                Physx.SetShapeLocalPose(shape.NativeObjectPtr, ref localPose);
-            }
+            // PhysxShape establishes the complete child pose and capsule direction before
+            // attachment. Do not overwrite it here, especially for shared native shapes.
         }
 
         /// <summary>
@@ -889,4 +882,4 @@ namespace PhysX5ForUnity
         }
 
     }
-} 
+}
